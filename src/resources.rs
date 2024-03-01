@@ -10,13 +10,7 @@ use crate::{
     ComponentId, World,
 };
 
-pub(crate) trait ResourceBase {}
-
-/// # Safety
-///   The implementer must guarantee that SEND is true if and only if the resource is Send
-pub unsafe trait Resource: 'static {
-    const SEND: bool;
-}
+pub trait Resource: 'static {}
 
 pub struct ResourceData<const SEND: bool> {
     data_storage: ErasedVec,

@@ -55,6 +55,8 @@ pub struct World {
 
     pub(crate) send_resources: Resources<true>,
     pub(crate) non_send_resources: Resources<false>,
+    // This SparseSet contains true if the resource is Send, false otherwise
+    pub(crate) resource_sendness: SparseSet<ComponentId, bool>,
 }
 
 pub struct UnsafeWorldPtr<'a>(UnsafeMutPtr<'a, World>);
@@ -75,6 +77,7 @@ impl World {
             archetype_manager: ArchetypeManager::default(),
             send_resources: Resources::new(),
             non_send_resources: Resources::new(),
+            resource_sendness: Default::default(),
         }
     }
 
@@ -138,39 +141,41 @@ impl World {
 
     pub fn add_resource<R: 'static + Send + Sync + Resource>(&mut self, resource: R) {
         let id = self.get_component_id_mut::<R>();
+        self.resource_sendness.insert(id, true);
         self.send_resources.add(id, resource);
     }
 
     pub fn add_non_send_resource<R: 'static + Resource>(&mut self, resource: R) {
         let id = self.get_component_id_mut::<R>();
+        self.resource_sendness.insert(id, false);
         self.non_send_resources.add(id, resource);
     }
 
     fn get_resource<R: Resource + 'static>(&self) -> Option<&R> {
         self.get_component_id::<R>()
             // SAFETY: This is safe because we're accessing a &R through a &World
-            .and_then(|id| unsafe { self.send_resources.get_ptr(id) })
+            .and_then(|id| unsafe {
+                let is_send = *self.resource_sendness.get(&id).unwrap();
+                if is_send {
+                    self.send_resources.get_ptr(id)
+                } else {
+                    self.non_send_resources.get_ptr(id)
+                }
+            })
             .map(|p| unsafe { std::mem::transmute::<&R, &R>(p.get()) })
     }
 
     fn get_resource_mut<R: Resource + 'static>(&mut self) -> Option<&mut R> {
         self.get_component_id::<R>()
             // SAFETY: This is safe because we're accessing a &mut R through a &mut World
-            .and_then(|id| unsafe { self.send_resources.get_mut_ptr(id) })
-            .map(|mut p| unsafe { std::mem::transmute::<&mut R, &mut R>(p.get_mut()) })
-    }
-
-    fn get_resource_non_send<R: Resource + 'static>(&self) -> Option<&R> {
-        self.get_component_id::<R>()
-            // SAFETY: This is safe because we're accessing a &R through a &World
-            .and_then(|id| unsafe { self.non_send_resources.get_ptr(id) })
-            .map(|p| unsafe { std::mem::transmute::<&R, &R>(p.get()) })
-    }
-
-    fn get_resource_mut_non_send<R: Resource + 'static>(&mut self) -> Option<&mut R> {
-        self.get_component_id::<R>()
-            // SAFETY: This is safe because we're accessing a &mut R through a &mut World
-            .and_then(|id| unsafe { self.non_send_resources.get_mut_ptr(id) })
+            .and_then(|id| unsafe {
+                let is_send = *self.resource_sendness.get(&id).unwrap();
+                if is_send {
+                    self.send_resources.get_mut_ptr(id)
+                } else {
+                    self.non_send_resources.get_mut_ptr(id)
+                }
+            })
             .map(|mut p| unsafe { std::mem::transmute::<&mut R, &mut R>(p.get_mut()) })
     }
 

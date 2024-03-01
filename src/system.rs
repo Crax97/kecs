@@ -1,15 +1,15 @@
 use crate::{
     erased_data_vec::ErasedVec,
     query::{AccessMode, Query, QueryParam, QueryState},
-    resources::{Res, ResMut, Resource, ResourceBase},
+    resources::{Res, ResMut, Resource},
     sparse_set::SparseSet,
     ComponentId, Entity, EntityInfo, World,
 };
-use std::marker::PhantomData;
+use std::{borrow::Cow, marker::PhantomData};
 
 pub trait SystemParam: Sized {
     type State: Send + Sync + 'static;
-    fn get_components(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>);
+    fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>);
     fn create<'world, 'state>(data: &'state Self::State, store: &'world mut World) -> Self
     where
         'world: 'state;
@@ -17,14 +17,21 @@ pub trait SystemParam: Sized {
     fn on_entity_changed(state: &mut Self::State, store: &World, entity: Entity, info: &EntityInfo);
 }
 pub trait System: Send + Sync + 'static {
+    fn get_name(&self) -> Cow<'static, str>;
     fn init(&mut self, store: &mut World);
     fn run(&mut self, store: &mut World);
+    fn compute_dependencies(&self, world: &mut World) -> SparseSet<ComponentId, AccessMode>;
     fn on_entity_changed(&mut self, store: &World, entity: Entity, info: &EntityInfo);
+}
+
+pub trait IntoSystem<ARGS> {
+    type SystemType: System;
+    fn into_system(self) -> Self::SystemType;
 }
 
 impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A> {
     type State = QueryState;
-    fn get_components(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
+    fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
         A::compute_component_set(store, components);
     }
     fn create<'world, 'state>(data: &'state Self::State, store: &'world mut World) -> Self
@@ -37,7 +44,7 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
 
     fn create_initial_state(store: &mut World) -> Self::State {
         let mut component_set = Default::default();
-        Self::get_components(store, &mut component_set);
+        Self::add_dependencies(store, &mut component_set);
 
         let state = QueryState {
             query_archetype: store
@@ -73,14 +80,16 @@ pub struct SystemContainer<F, A> {
     _args: PhantomData<A>,
     fun: F,
     system_data: Vec<ErasedVec>,
+    fun_name: Cow<'static, str>,
 }
 
 impl<F, A> SystemContainer<F, A> {
-    pub fn new(fun: F) -> Self {
+    pub fn new(fun: F, name: Cow<'static, str>) -> Self {
         Self {
             _args: PhantomData,
             fun,
             system_data: vec![],
+            fun_name: name,
         }
     }
 }
@@ -90,6 +99,10 @@ macro_rules! impl_system {
         impl<$($param: SystemParam + Send + Sync + 'static,)* FUN: Fn($($param,)*) + Send + Sync + 'static> System
             for SystemContainer<FUN, ($($param,)*)>
         {
+            fn get_name(&self) -> Cow<'static, str> {
+                self.fun_name.clone()
+            }
+
             fn init(&mut self, store: &mut World) {
                 $(
                 self.system_data.push({
@@ -117,6 +130,23 @@ macro_rules! impl_system {
                     )*
                 }
             }
+
+            fn compute_dependencies(&self, world: &mut World) -> SparseSet<ComponentId, AccessMode> {
+                let mut deps = Default::default();
+                $($param::add_dependencies(world, &mut deps);)*
+                deps
+            }
+        }
+
+        impl<$($param,)* FUN: Fn($($param,)*) + Send + Sync + 'static> IntoSystem<($($param,)*)> for FUN
+        where
+            $($param: SystemParam + Send + Sync + 'static,)*
+        {
+            type SystemType = SystemContainer<FUN, ($($param,)*)>;
+
+            fn into_system(self) -> Self::SystemType {
+                SystemContainer::new(self, Cow::Borrowed(std::any::type_name::<FUN>()))
+            }
         }
     };
 }
@@ -142,7 +172,7 @@ impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13 O:14 P:
 impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rworld, 'res, R> {
     type State = ();
 
-    fn get_components(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
+    fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
         let id = store.get_component_id_assertive::<R>();
         components.insert(id, AccessMode::Read);
     }
@@ -154,12 +184,16 @@ impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rw
         let id = store.get_component_id_assertive::<R>();
         // SAFETY: The scheduler MUST ensure that no system will mutably access this resource in parallel with this access
         unsafe {
-            let ptr = if R::SEND {
+            let res = if *store
+                .resource_sendness
+                .get(&id)
+                .expect("Failed to find resource info")
+            {
                 store.send_resources.get_unsafe_ref::<R>(id)
             } else {
                 store.non_send_resources.get_unsafe_ref::<R>(id)
             };
-            std::mem::transmute(ptr.unwrap())
+            std::mem::transmute(res.unwrap())
         }
     }
 
@@ -177,7 +211,7 @@ impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rw
 impl<'rworld, 'res, R: Resource + 'static> SystemParam for ResMut<'rworld, 'res, R> {
     type State = ();
 
-    fn get_components(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
+    fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
         let id = store.get_component_id_assertive::<R>();
         components.insert(id, AccessMode::Read);
     }
@@ -187,14 +221,18 @@ impl<'rworld, 'res, R: Resource + 'static> SystemParam for ResMut<'rworld, 'res,
         'world: 'state,
     {
         let id = store.get_component_id_assertive::<R>();
-        // SAFETY: The scheduler MUST ensure that no system will mutably access this resource in parallel with this access
+        // SAFETY: The scheduler MUST ensure that no other access is performed in parallel with this access
         unsafe {
-            let ptr = if R::SEND {
+            let res = if *store
+                .resource_sendness
+                .get(&id)
+                .expect("Failed to find resource info")
+            {
                 store.send_resources.get_unsafe_mut_ref::<R>(id)
             } else {
                 store.non_send_resources.get_unsafe_mut_ref::<R>(id)
             };
-            std::mem::transmute(ptr.unwrap())
+            std::mem::transmute(res.unwrap())
         }
     }
 

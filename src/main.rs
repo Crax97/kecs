@@ -10,6 +10,7 @@ mod type_registrar;
 mod world;
 
 use resources::{Res, Resource};
+use schedule::{GraphScheduler, LinearScheduler, Scheduler};
 use system::{System, SystemContainer, SystemParam};
 use world::*;
 
@@ -31,9 +32,7 @@ struct TestResource {
     cool_number: u32,
 }
 
-unsafe impl Resource for TestResource {
-    const SEND: bool = true;
-}
+impl Resource for TestResource {}
 
 fn system_i(query: Query<&IntComponent>, resource: Res<TestResource>) {
     for component in query.iter() {
@@ -74,7 +73,10 @@ where
     A: SystemParam + Send + Sync + 'static,
     B: SystemParam + Send + Sync + 'static,
 {
-    let mut system = SystemContainer::<F, (A, B)>::new(fun);
+    let mut system = SystemContainer::<F, (A, B)>::new(
+        fun,
+        std::borrow::Cow::Borrowed(std::any::type_name::<F>()),
+    );
     system.init(store);
     system.run(store);
 }
@@ -113,30 +115,8 @@ fn main() {
         },
     );
 
-    // println!("Running one-param systems");
-    test_run_system(&mut world, system_i);
+    let mut scheduler = GraphScheduler::new();
+    scheduler.add_system(&mut world, system_i);
 
-    // let mut query = Query::<TableStorage, &mut FloatComponent>::create_query(&mut store);
-    // query.exec(system_f);
-
-    // let mut query = Query::<TableStorage, &StringComponent>::create_query(&mut store);
-    // query.exec(system_s);
-
-    // println!("Running two-param systems");
-    // let mut query =
-    //     Query::<TableStorage, (&IntComponent, &FloatComponent)>::create_query(&mut store);
-    // query.exec(system_if);
-    // let mut query =
-    //     Query::<TableStorage, (&IntComponent, &StringComponent)>::create_query(&mut store);
-    // query.exec(system_is);
-    // let mut query =
-    //     Query::<TableStorage, (&FloatComponent, &StringComponent)>::create_query(&mut store);
-    // query.exec(system_fs);
-
-    // println!("Running three-param systems");
-    // let mut query =
-    //     Query::<TableStorage, (&IntComponent, &StringComponent, &FloatComponent)>::create_query(
-    //         &mut store,
-    //     );
-    // query.exec(system_ifs);
+    scheduler.execute(&mut world);
 }

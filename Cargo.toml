@@ -7,4 +7,5 @@ edition = "2021"
 
 [dependencies]
 libc = "0.2.153"
+petgraph = "0.6.4"
 rand = "0.8.5"

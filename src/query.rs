@@ -5,6 +5,7 @@ use crate::{
     UnsafeWorldPtr,
 };
 
+#[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash, Debug)]
 pub enum AccessMode {
     Read,
     Write,
