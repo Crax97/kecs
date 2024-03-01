@@ -1,32 +1,33 @@
 use crate::{
     erased_data_vec::ErasedVec,
     query::{AccessMode, Query, QueryParam, QueryState},
+    resources::{Res, ResMut, Resource, ResourceBase},
     sparse_set::SparseSet,
-    ComponentId, Entity, EntityInfo, Store,
+    ComponentId, Entity, EntityInfo, World,
 };
 use std::marker::PhantomData;
 
 pub trait SystemParam: Sized {
     type State: Send + Sync + 'static;
-    fn get_components(store: &mut Store, components: &mut SparseSet<ComponentId, AccessMode>);
-    fn create<'world, 'state>(data: &'state Self::State, store: &'world mut Store) -> Self
+    fn get_components(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>);
+    fn create<'world, 'state>(data: &'state Self::State, store: &'world mut World) -> Self
     where
         'world: 'state;
-    fn create_initial_state(store: &mut Store) -> Self::State;
-    fn on_entity_changed(state: &mut Self::State, store: &Store, entity: Entity, info: &EntityInfo);
+    fn create_initial_state(store: &mut World) -> Self::State;
+    fn on_entity_changed(state: &mut Self::State, store: &World, entity: Entity, info: &EntityInfo);
 }
 pub trait System: Send + Sync + 'static {
-    fn init(&mut self, store: &mut Store);
-    fn run(&mut self, store: &mut Store);
-    fn on_entity_changed(&mut self, store: &Store, entity: Entity, info: &EntityInfo);
+    fn init(&mut self, store: &mut World);
+    fn run(&mut self, store: &mut World);
+    fn on_entity_changed(&mut self, store: &World, entity: Entity, info: &EntityInfo);
 }
 
 impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A> {
     type State = QueryState;
-    fn get_components(store: &mut Store, components: &mut SparseSet<ComponentId, AccessMode>) {
+    fn get_components(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
         A::compute_component_set(store, components);
     }
-    fn create<'world, 'state>(data: &'state Self::State, store: &'world mut Store) -> Self
+    fn create<'world, 'state>(data: &'state Self::State, store: &'world mut World) -> Self
     where
         'world: 'state,
     {
@@ -34,7 +35,7 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
         unsafe { std::mem::transmute(Query::<'_, '_, A>::create_query(data, store.get_mut_ptr())) }
     }
 
-    fn create_initial_state(store: &mut Store) -> Self::State {
+    fn create_initial_state(store: &mut World) -> Self::State {
         let mut component_set = Default::default();
         Self::get_components(store, &mut component_set);
 
@@ -49,7 +50,7 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
 
     fn on_entity_changed(
         state: &mut Self::State,
-        store: &Store,
+        store: &World,
         entity: Entity,
         info: &EntityInfo,
     ) {
@@ -89,7 +90,7 @@ macro_rules! impl_system {
         impl<$($param: SystemParam + Send + Sync + 'static,)* FUN: Fn($($param,)*) + Send + Sync + 'static> System
             for SystemContainer<FUN, ($($param,)*)>
         {
-            fn init(&mut self, store: &mut Store) {
+            fn init(&mut self, store: &mut World) {
                 $(
                 self.system_data.push({
                     let mut erased = unsafe { ErasedVec::new_typed::<$param::State>(true, 1) };
@@ -104,11 +105,11 @@ macro_rules! impl_system {
                 }
             }
 
-            fn run(&mut self, store: &mut Store) {
+            fn run(&mut self, store: &mut World) {
                 (self.fun)($($param::create(unsafe { self.system_data[$idx].get::<$param::State>(0) }, store),)*);
             }
 
-            fn on_entity_changed(&mut self, store: &Store, entity: Entity, info: &EntityInfo) {
+            fn on_entity_changed(&mut self, store: &World, entity: Entity, info: &EntityInfo) {
                 {
                     $(
                         let state = unsafe { self.system_data[$idx].get_mut::<$param::State>(0) };
@@ -138,31 +139,72 @@ impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13 O:14);
 impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13 O:14 P:15);
 impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13 O:14 P:15 Q:16);
 
-// impl<A: SystemParam + Send + Sync + 'static, F: Fn(A) + Send + Sync + 'static> System
-//     for SystemContainer<F, (A,)>
-// {
-//     fn init(&mut self, store: &mut Store) {
-//         self.system_data.push({
-//             let mut erased = unsafe { ErasedVec::new_typed::<A::State>(true, 1) };
-//             let data = A::create_initial_state(store);
-//             unsafe { erased.push_back(data) };
-//             erased
-//         });
+impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rworld, 'res, R> {
+    type State = ();
 
-//         for (entity, info) in store.iter_all_entities() {
-//             self.on_entity_changed(store, entity, info)
-//         }
-//     }
+    fn get_components(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
+        let id = store.get_component_id_assertive::<R>();
+        components.insert(id, AccessMode::Read);
+    }
 
-//     fn run(&mut self, store: &mut Store) {
-//         let param = A::create(unsafe { self.system_data[0].get::<A::State>(0) }, store);
-//         (self.fun)(param);
-//     }
+    fn create<'world, 'state>(_data: &'state Self::State, store: &'world mut World) -> Self
+    where
+        'world: 'state,
+    {
+        let id = store.get_component_id_assertive::<R>();
+        // SAFETY: The scheduler MUST ensure that no system will mutably access this resource in parallel with this access
+        unsafe {
+            let ptr = if R::SEND {
+                store.send_resources.get_unsafe_ref::<R>(id)
+            } else {
+                store.non_send_resources.get_unsafe_ref::<R>(id)
+            };
+            std::mem::transmute(ptr.unwrap())
+        }
+    }
 
-//     fn on_entity_changed(&mut self, store: &Store, entity: Entity, info: &EntityInfo) {
-//         {
-//             let state = unsafe { self.system_data[0].get_mut::<A::State>(0) };
-//             A::on_entity_changed(state, store, entity, info);
-//         }
-//     }
-// }
+    fn create_initial_state(_store: &mut World) -> Self::State {}
+
+    fn on_entity_changed(
+        _state: &mut Self::State,
+        _store: &World,
+        _entity: Entity,
+        _info: &EntityInfo,
+    ) {
+    }
+}
+
+impl<'rworld, 'res, R: Resource + 'static> SystemParam for ResMut<'rworld, 'res, R> {
+    type State = ();
+
+    fn get_components(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
+        let id = store.get_component_id_assertive::<R>();
+        components.insert(id, AccessMode::Read);
+    }
+
+    fn create<'world, 'state>(_data: &'state Self::State, store: &'world mut World) -> Self
+    where
+        'world: 'state,
+    {
+        let id = store.get_component_id_assertive::<R>();
+        // SAFETY: The scheduler MUST ensure that no system will mutably access this resource in parallel with this access
+        unsafe {
+            let ptr = if R::SEND {
+                store.send_resources.get_unsafe_mut_ref::<R>(id)
+            } else {
+                store.non_send_resources.get_unsafe_mut_ref::<R>(id)
+            };
+            std::mem::transmute(ptr.unwrap())
+        }
+    }
+
+    fn create_initial_state(_store: &mut World) -> Self::State {}
+
+    fn on_entity_changed(
+        _state: &mut Self::State,
+        _store: &World,
+        _entity: Entity,
+        _info: &EntityInfo,
+    ) {
+    }
+}

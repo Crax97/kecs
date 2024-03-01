@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use crate::{
     archetype::{ArchetypeId, ArchetypeManager},
     erased_data_vec::{UnsafeMutPtr, UnsafePtr},
+    resources::{Resource, Resources},
     sparse_set::SparseSet,
     storage::{StorageType, TableStorage},
     type_registrar::{TypeRegistrar, UniqueTypeId},
@@ -44,23 +45,26 @@ pub(crate) struct EntityInfo {
     pub(crate) archetype_id: ArchetypeId,
 }
 
-pub struct Store {
+pub struct World {
     storage: TableStorage,
     next_entity_id: u32,
     entity_info: SparseSet<Entity, EntityInfo>,
     dropped_entities: Vec<Entity>,
     registrar: TypeRegistrar,
     archetype_manager: ArchetypeManager,
+
+    pub(crate) send_resources: Resources<true>,
+    pub(crate) non_send_resources: Resources<false>,
 }
 
-pub struct UnsafeStorePtr<'a>(UnsafeMutPtr<'a, Store>);
-impl<'a> Clone for UnsafeStorePtr<'a> {
+pub struct UnsafeWorldPtr<'a>(UnsafeMutPtr<'a, World>);
+impl<'a> Clone for UnsafeWorldPtr<'a> {
     fn clone(&self) -> Self {
         Self(UnsafeMutPtr(self.0 .0, PhantomData))
     }
 }
 
-impl Store {
+impl World {
     pub fn new() -> Self {
         Self {
             next_entity_id: 0,
@@ -69,11 +73,13 @@ impl Store {
             entity_info: SparseSet::default(),
             registrar: TypeRegistrar::default(),
             archetype_manager: ArchetypeManager::default(),
+            send_resources: Resources::new(),
+            non_send_resources: Resources::new(),
         }
     }
 
-    pub unsafe fn get_mut_ptr(&self) -> UnsafeStorePtr<'_> {
-        UnsafeStorePtr(UnsafeMutPtr((self as *const Store).cast_mut(), PhantomData))
+    pub unsafe fn get_mut_ptr(&self) -> UnsafeWorldPtr<'_> {
+        UnsafeWorldPtr(UnsafeMutPtr((self as *const World).cast_mut(), PhantomData))
     }
 
     pub fn new_entity(&mut self) -> Entity {
@@ -128,6 +134,44 @@ impl Store {
             self.storage
                 .add_entity_component(entity, component_id, component);
         }
+    }
+
+    pub fn add_resource<R: 'static + Send + Sync + Resource>(&mut self, resource: R) {
+        let id = self.get_component_id_mut::<R>();
+        self.send_resources.add(id, resource);
+    }
+
+    pub fn add_non_send_resource<R: 'static + Resource>(&mut self, resource: R) {
+        let id = self.get_component_id_mut::<R>();
+        self.non_send_resources.add(id, resource);
+    }
+
+    fn get_resource<R: Resource + 'static>(&self) -> Option<&R> {
+        self.get_component_id::<R>()
+            // SAFETY: This is safe because we're accessing a &R through a &World
+            .and_then(|id| unsafe { self.send_resources.get_ptr(id) })
+            .map(|p| unsafe { std::mem::transmute::<&R, &R>(p.get()) })
+    }
+
+    fn get_resource_mut<R: Resource + 'static>(&mut self) -> Option<&mut R> {
+        self.get_component_id::<R>()
+            // SAFETY: This is safe because we're accessing a &mut R through a &mut World
+            .and_then(|id| unsafe { self.send_resources.get_mut_ptr(id) })
+            .map(|mut p| unsafe { std::mem::transmute::<&mut R, &mut R>(p.get_mut()) })
+    }
+
+    fn get_resource_non_send<R: Resource + 'static>(&self) -> Option<&R> {
+        self.get_component_id::<R>()
+            // SAFETY: This is safe because we're accessing a &R through a &World
+            .and_then(|id| unsafe { self.non_send_resources.get_ptr(id) })
+            .map(|p| unsafe { std::mem::transmute::<&R, &R>(p.get()) })
+    }
+
+    fn get_resource_mut_non_send<R: Resource + 'static>(&mut self) -> Option<&mut R> {
+        self.get_component_id::<R>()
+            // SAFETY: This is safe because we're accessing a &mut R through a &mut World
+            .and_then(|id| unsafe { self.non_send_resources.get_mut_ptr(id) })
+            .map(|mut p| unsafe { std::mem::transmute::<&mut R, &mut R>(p.get_mut()) })
     }
 
     pub fn get_archetype_manager_mut(&mut self) -> &mut ArchetypeManager {
@@ -206,15 +250,17 @@ impl Store {
     pub fn get_component_id_mut<A: 'static>(&mut self) -> ComponentId {
         ComponentId(self.registrar.get_registration::<A>())
     }
-    pub fn get_component_id<A: 'static>(&self) -> ComponentId {
-        ComponentId(self.registrar.get::<A>())
-    }
-    pub fn get_component_id_maybe<A: 'static>(&self) -> Option<ComponentId> {
+    pub fn get_component_id<A: 'static>(&self) -> Option<ComponentId> {
         self.registrar.get_maybe::<A>().map(ComponentId)
     }
 
+    // Panics if the type wasn't registered (e.g by adding it beforehand)
+    pub fn get_component_id_assertive<A: 'static>(&self) -> ComponentId {
+        ComponentId(self.registrar.get::<A>())
+    }
+
     pub fn entity_has_component<A: 'static>(&self, entity: Entity) -> bool {
-        self.get_component_id_maybe::<A>().is_some_and(|id| {
+        self.get_component_id::<A>().is_some_and(|id| {
             self.entity_info(entity)
                 .is_some_and(|e| e.components.contains(&id))
         })
@@ -225,7 +271,7 @@ impl Store {
     }
 }
 
-impl Drop for Store {
+impl Drop for World {
     fn drop(&mut self) {
         let entities = self.entity_info.iter().map(|(e, _)| e).collect::<Vec<_>>();
         for ent in entities {
@@ -234,161 +280,25 @@ impl Drop for Store {
     }
 }
 
-impl<'a> UnsafeStorePtr<'a> {
-    pub unsafe fn get(&self) -> &Store {
+impl<'a> UnsafeWorldPtr<'a> {
+    pub unsafe fn get(&self) -> &World {
         self.0.get()
     }
-    pub unsafe fn get_mut(&mut self) -> &mut Store {
+    pub unsafe fn get_mut(&mut self) -> &mut World {
         self.0.get_mut()
     }
     pub unsafe fn get_component<A: 'static>(&self, entity: Entity) -> UnsafePtr<'a, A> {
         let store = unsafe { self.0 .0.as_mut().unwrap() };
-        let component_id = store.get_component_id::<A>();
+        let component_id = store.get_component_id_assertive::<A>();
         store.get_component(entity, component_id)
     }
 
     pub unsafe fn get_component_mut<A: 'static>(&self, entity: Entity) -> UnsafeMutPtr<'a, A> {
         let store = unsafe { self.0 .0.as_mut().unwrap() };
-        let component_id = store.get_component_id::<A>();
+        let component_id = store.get_component_id_assertive::<A>();
         store.get_component_mut(entity, component_id)
     }
 }
 
-unsafe impl<'a> Send for UnsafeStorePtr<'a> {}
-unsafe impl<'a> Sync for UnsafeStorePtr<'a> {}
-
-// pub unsafe trait SystemParamArg {
-//     type Arg;
-//     fn component_ids(store: &mut Store) -> Vec<ComponentId>;
-//     fn extract(indices: &[usize], vecs: &[&UnsafeCell<ErasedVec>], base: &mut usize) -> Self;
-// }
-
-// unsafe impl<A: 'static> SystemParamArg for &A {
-//     type Arg = A;
-//     fn component_ids(store: &mut Store) -> Vec<ComponentId> {
-//         vec![store.get_component_id::<A>()]
-//     }
-//     fn extract(indices: &[usize], vecs: &[&UnsafeCell<ErasedVec>], base: &mut usize) -> Self {
-//         let idx = *base;
-//         *base += 1;
-//         let vec = &vecs[idx];
-//         let vec = unsafe { vec.get().as_mut().unwrap() };
-//         unsafe { std::mem::transmute(vec.get::<Self::Arg>(indices[idx])) }
-//     }
-// }
-
-// unsafe impl<A: 'static> SystemParamArg for &mut A {
-//     type Arg = A;
-//     fn component_ids(store: &mut Store) -> Vec<ComponentId> {
-//         vec![store.get_component_id::<A>()]
-//     }
-//     fn extract(indices: &[usize], vecs: &[&UnsafeCell<ErasedVec>], base: &mut usize) -> Self {
-//         let idx = *base;
-//         *base += 1;
-//         let vec = &vecs[idx];
-//         let vec = unsafe { vec.get().as_mut().unwrap() };
-//         unsafe { std::mem::transmute(vec.get_mut::<Self::Arg>(indices[idx])) }
-//     }
-// }
-
-// unsafe impl<A: 'static, B: 'static> SystemParamArg for (A, B)
-// where
-//     A: SystemParamArg,
-//     B: SystemParamArg,
-// {
-//     type Arg = (A, B);
-//     fn component_ids(store: &mut Store) -> Vec<ComponentId> {
-//         A::component_ids(store)
-//             .into_iter()
-//             .chain(B::component_ids(store))
-//             .collect()
-//     }
-
-//     fn extract(indices: &[usize], vecs: &[&UnsafeCell<ErasedVec>], base: &mut usize) -> Self {
-//         (
-//             A::extract(indices, vecs, base),
-//             B::extract(indices, vecs, base),
-//         )
-//     }
-// }
-
-// unsafe impl<A: 'static, B: 'static, C: 'static> SystemParamArg for (A, B, C)
-// where
-//     A: SystemParamArg,
-//     B: SystemParamArg,
-//     C: SystemParamArg,
-// {
-//     type Arg = (A, B, C);
-//     fn component_ids(store: &mut Store) -> Vec<ComponentId> {
-//         A::component_ids(store)
-//             .into_iter()
-//             .chain(B::component_ids(store))
-//             .chain(C::component_ids(store))
-//             .collect()
-//     }
-
-//     fn extract(indices: &[usize], vecs: &[&UnsafeCell<ErasedVec>], base: &mut usize) -> Self {
-//         (
-//             A::extract(indices, vecs, base),
-//             B::extract(indices, vecs, base),
-//             C::extract(indices, vecs, base),
-//         )
-//     }
-// }
-
-// pub trait SystemParam {
-//     fn create(store: &mut Store) -> Self
-//     where
-//         Self: 'static;
-// }
-
-// pub trait System<T> {
-//     fn exec(&mut self, store: &mut Store);
-// }
-
-// pub struct Query<A: SystemParamArg> {
-//     _ph_data: PhantomData<A>,
-//     components: Vec<ComponentId>,
-//     store: *mut Store,
-//     entities: Vec<EntityInfo>,
-//     current_idx: usize,
-// }
-
-// impl<A: SystemParamArg> SystemParam for Query<A> {
-//     fn create(store: &mut Store) -> Self
-//     where
-//         Self: 'static,
-//     {
-//         Self {
-//             _ph_data: PhantomData,
-//             components: A::component_ids(store),
-//             current_idx: 0,
-//             store: store as *mut Store,
-//             entities: store.entity_info.iter().cloned().collect(),
-//         }
-//     }
-// }
-
-// impl<A: SystemParamArg> Query<A> {
-//     pub fn advance(&mut self) -> Option<A> {
-//         println!("Component ids {:?}", self.components);
-//         let store = unsafe { self.store.as_mut().unwrap() };
-//         let vecs = store.extract_vecs(&self.components).unwrap();
-
-//         if self.current_idx == self.entities.len() {
-//             return None;
-//         }
-//         while let Some(entity) = self.entities.get(self.current_idx) {
-//             self.current_idx += 1;
-//             println!("Checking entity with components {:?}", entity.components);
-//             if let Some(indices) = entity.components.get_multi(&self.components) {
-//                 let mut idx = 0;
-//                 let a = A::extract(&indices, &vecs, &mut idx);
-
-//                 return Some(a);
-//             }
-//         }
-
-//         return None;
-//     }
-// }
+unsafe impl<'a> Send for UnsafeWorldPtr<'a> {}
+unsafe impl<'a> Sync for UnsafeWorldPtr<'a> {}

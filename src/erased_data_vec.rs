@@ -221,11 +221,11 @@ unsafe impl Send for ErasedVec {}
 unsafe impl Sync for ErasedVec {}
 
 impl<'a> ErasedPtr<'a> {
-    pub unsafe fn cast<T: 'static>(&self) -> UnsafePtr<T> {
+    pub unsafe fn cast<T: 'static>(self) -> UnsafePtr<'a, T> {
         UnsafePtr(self.data.cast::<T>().as_ptr().cast_const(), PhantomData)
     }
 
-    pub unsafe fn cast_mut<T: 'static>(&self) -> UnsafeMutPtr<T> {
+    pub unsafe fn cast_mut<T: 'static>(self) -> UnsafeMutPtr<'a, T> {
         UnsafeMutPtr(self.data.cast::<T>().as_ptr(), PhantomData)
     }
 }

@@ -1,8 +1,8 @@
 use std::{collections::HashSet, marker::PhantomData};
 
 use crate::{
-    archetype::ArchetypeId, sparse_set::SparseSet, store::Store, ComponentId, Entity,
-    UnsafeStorePtr,
+    archetype::ArchetypeId, sparse_set::SparseSet, world::World, ComponentId, Entity,
+    UnsafeWorldPtr,
 };
 
 pub enum AccessMode {
@@ -12,17 +12,17 @@ pub enum AccessMode {
 
 pub trait QueryParam {
     fn compute_component_set(
-        store: &mut Store,
+        store: &mut World,
         component_set: &mut SparseSet<ComponentId, AccessMode>,
     );
-    fn can_extract(store: &Store, entity: Entity) -> bool;
-    unsafe fn extract(store: &UnsafeStorePtr, entity: Entity) -> Self;
+    fn can_extract(store: &World, entity: Entity) -> bool;
+    unsafe fn extract(store: &UnsafeWorldPtr, entity: Entity) -> Self;
 }
 
 pub struct Query<'world, 'state, A: QueryParam> {
     _ph: PhantomData<A>,
     state: &'state QueryState,
-    world_ptr: UnsafeStorePtr<'world>,
+    world_ptr: UnsafeWorldPtr<'world>,
 }
 
 #[derive(Default)]
@@ -33,12 +33,12 @@ pub struct QueryState {
 
 pub struct QueryIterator<'world, 'state, A: QueryParam> {
     _ph: PhantomData<A>,
-    world_ptr: UnsafeStorePtr<'world>,
+    world_ptr: UnsafeWorldPtr<'world>,
     entity_iterator: std::collections::hash_set::Iter<'state, Entity>,
 }
 
 impl<'world, 'state, A: QueryParam> Query<'world, 'state, A> {
-    pub fn create_query(state: &'state QueryState, world_ptr: UnsafeStorePtr<'world>) -> Self {
+    pub fn create_query(state: &'state QueryState, world_ptr: UnsafeWorldPtr<'world>) -> Self {
         Self {
             _ph: PhantomData,
             state,
@@ -70,16 +70,16 @@ impl<A> QueryParam for &A
 where
     A: 'static,
 {
-    unsafe fn extract(store: &UnsafeStorePtr, entity: Entity) -> Self {
+    unsafe fn extract(store: &UnsafeWorldPtr, entity: Entity) -> Self {
         std::mem::transmute(store.get_component::<A>(entity).get())
     }
 
-    fn can_extract(store: &Store, entity: Entity) -> bool {
+    fn can_extract(store: &World, entity: Entity) -> bool {
         store.entity_has_component::<A>(entity)
     }
 
     fn compute_component_set(
-        store: &mut Store,
+        store: &mut World,
         component_set: &mut SparseSet<ComponentId, AccessMode>,
     ) {
         let id = store.get_component_id_mut::<A>();
@@ -93,15 +93,15 @@ impl<A> QueryParam for &mut A
 where
     A: 'static,
 {
-    unsafe fn extract(store: &UnsafeStorePtr, entity: Entity) -> Self {
+    unsafe fn extract(store: &UnsafeWorldPtr, entity: Entity) -> Self {
         std::mem::transmute(store.get_component_mut::<A>(entity))
     }
 
-    fn can_extract(store: &Store, entity: Entity) -> bool {
+    fn can_extract(store: &World, entity: Entity) -> bool {
         store.entity_has_component::<A>(entity)
     }
     fn compute_component_set(
-        store: &mut Store,
+        store: &mut World,
         component_set: &mut SparseSet<ComponentId, AccessMode>,
     ) {
         let id = store.get_component_id_mut::<A>();
@@ -117,14 +117,14 @@ macro_rules! impl_query_for_tuple {
             $($t: QueryParam,)*
         {
 
-            unsafe fn extract(store: &UnsafeStorePtr, entity: Entity) -> Self {
+            unsafe fn extract(store: &UnsafeWorldPtr, entity: Entity) -> Self {
                 ($($t::extract(store, entity),)*)
             }
 
-            fn can_extract(store: &Store, entity: Entity) -> bool {
+            fn can_extract(store: &World, entity: Entity) -> bool {
                 $($t::can_extract(store, entity) &&)* true
             }
-            fn compute_component_set(store: &mut Store, component_set: &mut SparseSet<ComponentId, AccessMode>) {
+            fn compute_component_set(store: &mut World, component_set: &mut SparseSet<ComponentId, AccessMode>) {
                 $($t::compute_component_set(store, component_set);)*
             }
         }
