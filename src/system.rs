@@ -133,7 +133,13 @@ macro_rules! impl_system {
 
             fn compute_dependencies(&self, world: &mut World) -> SparseSet<ComponentId, AccessMode> {
                 let mut deps = Default::default();
-                $($param::add_dependencies(world, &mut deps);)*
+                $(
+                {
+                    let mut param_deps = Default::default();
+                    $param::add_dependencies(world, &mut param_deps);
+                    add_dependencies(param_deps, &mut deps);
+                }
+                )*
                 deps
             }
         }
@@ -168,6 +174,21 @@ impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13);
 impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13 O:14);
 impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13 O:14 P:15);
 impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13 O:14 P:15 Q:16);
+
+fn add_dependencies(
+    param_deps: SparseSet<ComponentId, AccessMode>,
+    system_deps: &mut SparseSet<ComponentId, AccessMode>,
+) {
+    for (component, access) in param_deps.iter() {
+        if let Some(sys_access) = system_deps.get_mut(component) {
+            if *access == AccessMode::Write {
+                *sys_access = *access;
+            }
+        } else {
+            system_deps.insert(component, *access);
+        }
+    }
+}
 
 impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rworld, 'res, R> {
     type State = ();

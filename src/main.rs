@@ -40,9 +40,18 @@ fn system_i(query: Query<&IntComponent>, resource: Res<TestResource>) {
     }
 }
 
-fn system_f(comp: &mut FloatComponent) {
-    println!("float is {}", comp.data);
-    comp.data *= 100.0;
+fn system_i2(comp: Query<&mut IntComponent>) {
+    for component in comp.iter() {
+        println!("Component value is {}", component.data);
+        component.data *= 10;
+    }
+}
+
+fn system_f(comp: Query<&mut FloatComponent>) {
+    for component in comp.iter() {
+        println!("Component float is {}", component.data);
+        component.data *= 10.0;
+    }
 }
 
 fn system_s(comp: &StringComponent) {
@@ -116,7 +125,10 @@ fn main() {
     );
 
     let mut scheduler = GraphScheduler::new();
+    scheduler.add_system(&mut world, system_f);
+    scheduler.add_system(&mut world, system_i2);
     scheduler.add_system(&mut world, system_i);
+    scheduler.add_system(&mut world, system_i2);
 
     scheduler.execute(&mut world);
 }

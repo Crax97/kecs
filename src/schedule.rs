@@ -1,12 +1,11 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::path::Display;
 
-use petgraph::data::Build;
 use petgraph::dot::Dot;
 use petgraph::graph::NodeIndex;
+use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Graph};
 
 use crate::query::AccessMode;
@@ -28,7 +27,6 @@ pub unsafe trait Scheduler {
         world: &mut World,
         system: S,
     ) -> Self::SystemId;
-    fn remove_system(&mut self, id: Self::SystemId);
 
     fn execute(&mut self, world: &mut World);
 }
@@ -36,12 +34,14 @@ pub unsafe trait Scheduler {
 /// This scheduler runs all the systems on the same thread sequentially
 #[derive(Default)]
 pub struct LinearScheduler {
-    systems: Vec<Option<Box<dyn System>>>,
+    systems: Vec<Box<dyn System>>,
 }
 pub struct GraphScheduler {
     current_dependencies: SparseSet<ComponentId, GraphResourceOwnership>,
     graph: Graph<SystemGraphNode, SystemGraphEdge, Directed>,
     root_node_idx: NodeIndex,
+    changed_schedule: bool,
+    cached_schedule: Schedules,
 }
 
 /// # Safety
@@ -62,18 +62,12 @@ unsafe impl Scheduler for LinearScheduler {
         let mut system = system.into_system();
         system.init(world);
 
-        self.systems.push(Some(Box::new(system)));
+        self.systems.push(Box::new(system));
         id
     }
 
-    fn remove_system(&mut self, id: Self::SystemId) {
-        if let Some(sys) = self.systems.get_mut(id) {
-            *sys = None;
-        }
-    }
-
     fn execute(&mut self, world: &mut World) {
-        for system in self.systems.iter_mut().filter_map(|s| s.as_mut()) {
+        for system in self.systems.iter_mut() {
             system.run(world);
         }
     }
@@ -95,6 +89,8 @@ unsafe impl Scheduler for GraphScheduler {
             current_dependencies: Default::default(),
             graph,
             root_node_idx,
+            changed_schedule: true,
+            cached_schedule: Default::default(),
         }
     }
 
@@ -115,8 +111,12 @@ unsafe impl Scheduler for GraphScheduler {
         let mut node_dependencies = HashMap::<NodeIndex, SystemGraphEdge>::new();
         for (component, ownership) in self.current_dependencies.iter() {
             if let Some(sys_access) = system_dependencies.get(&component) {
-                if *sys_access != ownership.access_mode {
-                    // Dependency: the access mode changes
+                if *sys_access != ownership.access_mode
+                    || (*sys_access == AccessMode::Write
+                        && ownership.access_mode == AccessMode::Write)
+                {
+                    // Dependency: the access mode changes or the previous system writes to the same components
+                    // of the new system
                     node_dependencies
                         .entry(ownership.system_node)
                         .or_default()
@@ -151,22 +151,85 @@ unsafe impl Scheduler for GraphScheduler {
                 self.graph.add_edge(owner, node, changes);
             }
         }
-
+        self.changed_schedule = true;
         node
     }
 
-    fn remove_system(&mut self, id: Self::SystemId) {
-        // if let Some(sys) = self.systems.get_mut(id) {
-        //     *sys = None;
-        // }
-    }
-
     fn execute(&mut self, world: &mut World) {
+        if self.changed_schedule {
+            self.cached_schedule = self.compute_schedule();
+            self.changed_schedule = false;
+        }
+        for (i, schedule) in self.cached_schedule.groups.iter().enumerate() {
+            println!("Schedule {i}");
+            for job in &schedule.jobs {
+                let system = self.graph.node_weight_mut(*job).unwrap();
+                if let Some(system) = &mut system.system {
+                    println!("\tScheduling job {}", system.get_name());
+                    system.run(world);
+                }
+            }
+        }
+    }
+}
+
+impl GraphScheduler {
+    fn compute_schedule(&self) -> Schedules {
+        let mut previous_scheduled_nodes = HashSet::new();
+        previous_scheduled_nodes.insert(self.root_node_idx);
+        let mut current_jobs: HashSet<NodeIndex> = self
+            .graph
+            .edges(self.root_node_idx)
+            .map(|e| e.target())
+            .collect();
+        let mut schedules = vec![];
+
+        while !current_jobs.is_empty() {
+            let mut next_jobs = HashSet::new();
+            let mut current_schedule = vec![];
+            for job in current_jobs {
+                let mut parents = self
+                    .graph
+                    .edges_directed(job, petgraph::Direction::Incoming);
+                let all_parents_scheduled =
+                    parents.all(|p| previous_scheduled_nodes.contains(&p.source()));
+
+                // A system can only be scheduled if all of its parents have been scheduled
+                if all_parents_scheduled {
+                    self.graph.edges(job).map(|e| e.target()).for_each(|j| {
+                        next_jobs.insert(j);
+                    });
+                    current_schedule.push(job);
+                    previous_scheduled_nodes.insert(job);
+                }
+            }
+
+            if !current_schedule.is_empty() {
+                schedules.push(Schedule {
+                    jobs: current_schedule,
+                })
+            }
+            current_jobs = next_jobs;
+        }
+
+        Schedules { groups: schedules }
+    }
+}
+
+#[derive(Default)]
+struct Schedule {
+    jobs: Vec<NodeIndex>,
+}
+
+#[derive(Default)]
+struct Schedules {
+    groups: Vec<Schedule>,
+}
+
+impl GraphScheduler {
+    pub fn print_jobs(&self) {
         let dot = Dot::new(&self.graph);
         println!("{}", dot);
-        // for system in self.systems.iter_mut().filter_map(|s| s.as_mut()) {
-        //     system.run(world);
-        // }
     }
 }
 
@@ -222,5 +285,128 @@ impl std::fmt::Display for SystemGraphEdge {
     fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // TODO: Write compont names + accesses
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::{query::Query, World};
+
+    use super::{GraphScheduler, Scheduler};
+
+    #[derive(Default)]
+    struct Component1;
+
+    #[derive(Default)]
+    struct Component2;
+
+    fn write_component_1(_: Query<&mut Component1>) {}
+    fn write_component_2(_: Query<&mut Component2>) {}
+
+    fn read_component_1(_: Query<&Component1>) {}
+    fn read_component_2(_: Query<&Component2>) {}
+    fn read_write_component_1(_: Query<&Component1>, _: Query<&mut Component1>) {}
+
+    #[test]
+    fn empty_schedule() {
+        let scheduler = GraphScheduler::new();
+
+        let schedule = scheduler.compute_schedule();
+        assert!(schedule.groups.is_empty());
+    }
+
+    #[test]
+    fn write_then_read() {
+        let mut world = World::new();
+        let mut scheduler = GraphScheduler::new();
+
+        let system_0 = scheduler.add_system(&mut world, write_component_1);
+        let system_1 = scheduler.add_system(&mut world, write_component_2);
+
+        let schedule = scheduler.compute_schedule();
+        assert_eq!(schedule.groups.len(), 1);
+        assert!(schedule.groups[0].jobs.contains(&system_0));
+        assert!(schedule.groups[0].jobs.contains(&system_1));
+    }
+
+    #[test]
+    fn disjoint_systems() {
+        let mut world = World::new();
+        let mut scheduler = GraphScheduler::new();
+
+        let system_0 = scheduler.add_system(&mut world, write_component_1);
+        let system_1 = scheduler.add_system(&mut world, read_component_1);
+
+        scheduler.print_jobs();
+
+        let schedule = scheduler.compute_schedule();
+        assert_eq!(schedule.groups.len(), 2);
+        assert!(schedule.groups[0].jobs.contains(&system_0));
+        assert!(schedule.groups[1].jobs.contains(&system_1));
+    }
+
+    #[test]
+    fn parallel_read() {
+        let mut world = World::new();
+        let mut scheduler = GraphScheduler::new();
+
+        let system_0 = scheduler.add_system(&mut world, read_component_1);
+        let system_1 = scheduler.add_system(&mut world, read_component_1);
+
+        let schedule = scheduler.compute_schedule();
+        assert_eq!(schedule.groups.len(), 1);
+        assert!(schedule.groups[0].jobs.contains(&system_0));
+        assert!(schedule.groups[0].jobs.contains(&system_1));
+    }
+
+    #[test]
+    fn parallel_write() {
+        let mut world = World::new();
+        let mut scheduler = GraphScheduler::new();
+
+        let system_0 = scheduler.add_system(&mut world, write_component_1);
+        let system_1 = scheduler.add_system(&mut world, write_component_1);
+
+        let schedule = scheduler.compute_schedule();
+        assert_eq!(schedule.groups.len(), 2);
+        assert!(schedule.groups[0].jobs.contains(&system_0));
+        assert!(schedule.groups[1].jobs.contains(&system_1));
+    }
+
+    #[test]
+    fn read_then_write() {
+        let mut world = World::new();
+        let mut scheduler = GraphScheduler::new();
+
+        let system_0 = scheduler.add_system(&mut world, read_component_1);
+        let system_1 = scheduler.add_system(&mut world, write_component_1);
+
+        let schedule = scheduler.compute_schedule();
+        assert_eq!(schedule.groups.len(), 2);
+        assert!(schedule.groups[0].jobs.contains(&system_0));
+        assert!(schedule.groups[1].jobs.contains(&system_1));
+    }
+
+    #[test]
+    fn read_then_write_same_query() {
+        let mut world = World::new();
+        let mut scheduler = GraphScheduler::new();
+
+        let system_0 = scheduler.add_system(&mut world, read_component_1);
+
+        // Since this system writes TestComponent in a query, system_2 must wait for it
+        let system_1 = scheduler.add_system(&mut world, read_write_component_1);
+
+        let system_2 = scheduler.add_system(&mut world, read_component_1);
+
+        let schedule = scheduler.compute_schedule();
+
+        scheduler.print_jobs();
+        assert_eq!(schedule.groups.len(), 3);
+
+        assert!(schedule.groups[0].jobs.contains(&system_0));
+        assert!(schedule.groups[1].jobs.contains(&system_1));
+        assert!(schedule.groups[2].jobs.contains(&system_2));
     }
 }
