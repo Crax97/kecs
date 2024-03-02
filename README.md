@@ -97,8 +97,8 @@ fn print_player_position(query: Query<(&Player, Entity, &EntityName, &Transform)
 
     let mut scheduler = GraphScheduler::new();
     scheduler.add_system(&mut world, update_bullet_position);
-    scheduler.add_system(&mut world, print_player_position);
     scheduler.add_system(&mut world, print_transform_system);
+    scheduler.add_system(&mut world, print_player_position);
 
 ```
 
@@ -112,6 +112,10 @@ fn print_player_position(query: Query<(&Player, Entity, &EntityName, &Transform)
         println!("\n\n");
     }
 ```
+
+The execution graph for the sample above is the following
+
+![Execution graph](images/simple_graph.png)
 
 # FAQ
 ### Why would i use this ECS over more established ones?

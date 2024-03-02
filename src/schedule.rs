@@ -168,7 +168,12 @@ unsafe impl Scheduler for GraphScheduler {
                 );
             } else {
                 for (owner, changes) in node_dependencies {
-                    for change in &changes.changes {
+                    // We're only interested in recording who writes the resources
+                    for change in changes
+                        .changes
+                        .iter()
+                        .filter(|c| c.new_access_mode == AccessMode::Write)
+                    {
                         let dep = self.current_dependencies.get_mut(change.component).unwrap();
                         dep.access_mode = change.new_access_mode;
                         dep.system_node = system_node_idx;
@@ -177,6 +182,7 @@ unsafe impl Scheduler for GraphScheduler {
                 }
             }
         }
+
         self.changed_schedule = true;
         system_node_idx
     }
@@ -288,6 +294,7 @@ pub struct SystemGraphEdge {
     pub changes: Vec<SystemGraphChange>,
 }
 
+#[derive(Debug)]
 pub struct GraphResourceOwnership {
     access_mode: AccessMode,
     system_node: NodeIndex,
@@ -318,7 +325,7 @@ mod tests {
     use crate::{
         query::Query,
         resources::{ResMut, Resource},
-        World,
+        Entity, World,
     };
 
     use super::{GraphScheduler, Scheduler};
@@ -500,5 +507,64 @@ mod tests {
         assert!(schedule.groups[0].jobs.contains(&sys_c_id));
         assert!(schedule.groups[1].jobs.contains(&sys_f_id));
         assert!(schedule.groups[2].jobs.contains(&sys_d_id));
+    }
+
+    #[test]
+    fn game() {
+        #[derive(Debug)]
+        struct EntityName(String);
+
+        struct Bullet {
+            direction: [f32; 2],
+        }
+
+        // A struct without any members is called a tag structure
+        struct Player;
+
+        #[derive(Default, Debug)]
+        struct Transform {
+            position: [f32; 2],
+        }
+
+        // A query is an iterator over the entities with the specified components
+        fn update_bullet_position(query: Query<(&Bullet, &mut Transform)>) {
+            for (bullet, transform) in query.iter() {
+                transform.position[0] += bullet.direction[0];
+                transform.position[1] += bullet.direction[1];
+            }
+        }
+
+        // You can also get the entity itself
+        fn print_transform_system(query: Query<(Entity, &EntityName, &Transform)>) {
+            for (entity, entity_name, transform) in query.iter() {
+                println!(
+                    "Transform of entity {entity:?} with name '{}' at {:?}",
+                    entity_name.0, transform
+                );
+            }
+        }
+
+        fn print_player_position(query: Query<(&Player, Entity, &EntityName, &Transform)>) {
+            for (_, entity, entity_name, transform) in query.iter() {
+                println!(
+                    "Transform of player {entity:?} with name '{}' at {:?}",
+                    entity_name.0, transform
+                );
+            }
+        }
+
+        let mut world = World::new();
+        let mut scheduler = GraphScheduler::new();
+        let update = scheduler.add_system(&mut world, update_bullet_position);
+        let print_1 = scheduler.add_system(&mut world, print_player_position);
+        let print_2 = scheduler.add_system(&mut world, print_transform_system);
+        scheduler.print_jobs();
+
+        let schedule = scheduler.compute_schedule();
+
+        assert!(schedule.groups.len() == 2);
+        assert!(schedule.groups[0].jobs.contains(&update));
+        assert!(schedule.groups[1].jobs.contains(&print_1));
+        assert!(schedule.groups[1].jobs.contains(&print_2));
     }
 }
