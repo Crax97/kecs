@@ -77,7 +77,7 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
         let entity_archetype = archetype_manager
             .get_archetype(info.archetype_id)
             .expect("Failed to get archetype for entity");
-        if system_archetype.includes(entity_archetype) {
+        if entity_archetype.includes_fully(system_archetype) {
             state.entities.insert(entity);
         } else {
             state.entities.remove(&entity);
@@ -236,6 +236,7 @@ impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13 O:14);
 impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13 O:14 P:15);
 impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13 O:14 P:15 Q:16);
 
+#[allow(clippy::extra_unused_type_parameters)]
 const fn count_params<A>() -> usize {
     1
 }

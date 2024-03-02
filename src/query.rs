@@ -66,6 +66,19 @@ impl<'world, 'state, A: QueryParam> Iterator for QueryIterator<'world, 'state, A
             .map(|e| unsafe { A::extract(&self.world_ptr, *e) })
     }
 }
+impl QueryParam for Entity {
+    fn compute_component_set(
+        _store: &mut World,
+        _component_set: &mut SparseSet<ComponentId, AccessMode>,
+    ) {
+    }
+    fn can_extract(_store: &World, _entity: Entity) -> bool {
+        true
+    }
+    unsafe fn extract(_store: &UnsafeWorldPtr, entity: Entity) -> Self {
+        entity
+    }
+}
 
 impl<A> QueryParam for &A
 where

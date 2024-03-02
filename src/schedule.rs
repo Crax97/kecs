@@ -187,11 +187,9 @@ unsafe impl Scheduler for GraphScheduler {
             self.changed_schedule = false;
         }
         for (i, schedule) in self.cached_schedule.groups.iter().enumerate() {
-            println!("Schedule {i}");
             for job in &schedule.jobs {
                 let system = self.graph.node_weight_mut(*job).unwrap();
                 if let Some(system) = &mut system.system {
-                    println!("\tScheduling job {}", system.get_name());
                     system.run(world);
                 }
             }
@@ -336,7 +334,7 @@ mod tests {
 
     fn read_component_1(_: Query<&Component1>) {}
     fn read_component_2(_: Query<&Component2>) {}
-    fn non_parallel_system(_: &mut World, _: Query<&Component1>) {}
+    fn non_parallel_system(_: &mut World) {}
     fn read_write_component_1(_: Query<&Component1>, _: Query<&mut Component1>) {}
 
     #[test]

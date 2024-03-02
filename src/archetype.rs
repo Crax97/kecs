@@ -15,7 +15,8 @@ pub struct Archetype {
 }
 
 impl Archetype {
-    pub fn includes(&self, other: &Archetype) -> bool {
+    /// Checks if other's keys are all included in self's keys
+    pub fn includes_fully(&self, other: &Archetype) -> bool {
         for component in &other.components {
             if !self.components.contains(component) {
                 return false;

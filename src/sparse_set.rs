@@ -36,8 +36,6 @@ impl<T: Clone, I: Clone> Clone for SparseSet<T, I> {
     }
 }
 
-pub type SimpleSparseSet<I> = SparseSet<I, ()>;
-
 impl<T, I: SparseIndex> Default for SparseSet<I, T> {
     fn default() -> Self {
         Self {
@@ -173,7 +171,7 @@ mod tests {
     fn operations() {
         use rand::seq::SliceRandom;
 
-        let mut sparse_set = SimpleSparseSet::new();
+        let mut sparse_set = SparseSet::<usize, ()>::new();
         let mut inserted_numbers: HashSet<usize> = Default::default();
         for _ in 0..rand::random::<usize>().max(1) % ITERS_MAX {
             let num: usize = rand::random::<usize>() % VALUE_MAX;

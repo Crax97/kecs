@@ -40,9 +40,9 @@ impl From<Entity> for usize {
 }
 
 #[derive(Default, Clone, Debug)]
-pub(crate) struct EntityInfo {
-    pub(crate) components: SparseSet<ComponentId, ()>,
-    pub(crate) archetype_id: ArchetypeId,
+pub struct EntityInfo {
+    pub components: SparseSet<ComponentId, ()>,
+    pub archetype_id: ArchetypeId,
 }
 
 pub struct World {
@@ -81,7 +81,7 @@ impl World {
         }
     }
 
-    pub unsafe fn get_mut_ptr(&self) -> UnsafeWorldPtr<'_> {
+    pub(crate) unsafe fn get_mut_ptr(&self) -> UnsafeWorldPtr<'_> {
         UnsafeWorldPtr(UnsafeMutPtr((self as *const World).cast_mut(), PhantomData))
     }
 
@@ -151,7 +151,7 @@ impl World {
         self.non_send_resources.add(id, resource);
     }
 
-    fn get_resource<R: Resource + 'static>(&self) -> Option<&R> {
+    pub fn get_resource<R: Resource + 'static>(&self) -> Option<&R> {
         self.get_component_id::<R>()
             // SAFETY: This is safe because we're accessing a &R through a &World
             .and_then(|id| unsafe {
@@ -165,7 +165,7 @@ impl World {
             .map(|p| unsafe { std::mem::transmute::<&R, &R>(p.get()) })
     }
 
-    fn get_resource_mut<R: Resource + 'static>(&mut self) -> Option<&mut R> {
+    pub fn get_resource_mut<R: Resource + 'static>(&mut self) -> Option<&mut R> {
         self.get_component_id::<R>()
             // SAFETY: This is safe because we're accessing a &mut R through a &mut World
             .and_then(|id| unsafe {
@@ -276,6 +276,12 @@ impl World {
     }
 }
 
+impl Default for World {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Drop for World {
     fn drop(&mut self) {
         let entities = self.entity_info.iter().map(|(e, _)| e).collect::<Vec<_>>();
@@ -286,19 +292,16 @@ impl Drop for World {
 }
 
 impl<'a> UnsafeWorldPtr<'a> {
-    pub unsafe fn get(&self) -> &World {
-        self.0.get()
-    }
-    pub unsafe fn get_mut(&mut self) -> &mut World {
-        self.0.get_mut()
-    }
-    pub unsafe fn get_component<A: 'static>(&self, entity: Entity) -> UnsafePtr<'a, A> {
+    pub(crate) unsafe fn get_component<A: 'static>(&self, entity: Entity) -> UnsafePtr<'a, A> {
         let store = unsafe { self.0 .0.as_mut().unwrap() };
         let component_id = store.get_component_id_assertive::<A>();
         store.get_component(entity, component_id)
     }
 
-    pub unsafe fn get_component_mut<A: 'static>(&self, entity: Entity) -> UnsafeMutPtr<'a, A> {
+    pub(crate) unsafe fn get_component_mut<A: 'static>(
+        &self,
+        entity: Entity,
+    ) -> UnsafeMutPtr<'a, A> {
         let store = unsafe { self.0 .0.as_mut().unwrap() };
         let component_id = store.get_component_id_assertive::<A>();
         store.get_component_mut(entity, component_id)

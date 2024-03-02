@@ -27,7 +27,6 @@ where
     _ph: PhantomData<&'res T>,
     _ph_world: PhantomData<&'world World>,
     ptr: UnsafePtr<'res, T>,
-    send: bool,
 }
 
 pub struct ResMut<'world, 'res, T: 'static>
@@ -59,7 +58,7 @@ impl<const SEND: bool> ResourceData<SEND> {
                 .original_creator
                 .is_some_and(|id| id != std::thread::current().id())
         {
-            panic!("Tried to read/write a non SEND resource from a thread that does not own it. Panicking");
+            panic!("Tried to read/write non SEND resource '{}' from a thread that does not own it. Panicking", self.type_name);
         }
     }
 }
@@ -115,7 +114,6 @@ impl<const SEND: bool> Resources<SEND> {
             _ph: PhantomData,
             _ph_world: PhantomData,
             ptr: p,
-            send: SEND,
         })
     }
 
