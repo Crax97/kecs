@@ -9,6 +9,7 @@ use std::{borrow::Cow, marker::PhantomData};
 
 pub trait SystemParam: Sized {
     type State: Send + Sync + 'static;
+    const IS_WORLD: bool;
 
     fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>);
     fn create<'world, 'state>(data: &'state Self::State, store: &'world mut World) -> Self
@@ -29,11 +30,16 @@ pub trait System: Send + Sync + 'static {
 
 pub trait IntoSystem<ARGS> {
     type SystemType: System;
+    const HAS_WORLD: bool;
+    const NUM_PARAMS: usize;
+
     fn into_system(self) -> Self::SystemType;
 }
 
 impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A> {
     type State = QueryState;
+    const IS_WORLD: bool = false;
+
     fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
         A::compute_component_set(store, components);
     }
@@ -78,13 +84,14 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
         }
     }
 
-    fn is_exclusive(world: &World) -> bool {
+    fn is_exclusive(_world: &World) -> bool {
         false
     }
 }
 
 impl SystemParam for &mut World {
     type State = ();
+    const IS_WORLD: bool = true;
 
     fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
         let id_of_world = store.get_or_create_component_id::<World>();
@@ -136,7 +143,10 @@ macro_rules! impl_system {
         impl<$($param: SystemParam + Send + Sync + 'static,)* FUN: Fn($($param,)*) + Send + Sync + 'static> System
             for SystemContainer<FUN, ($($param,)*)>
         {
+
             fn get_name(&self) -> Cow<'static, str> {
+
+
                 self.fun_name.clone()
             }
 
@@ -192,9 +202,16 @@ macro_rules! impl_system {
         where
             $($param: SystemParam + Send + Sync + 'static,)*
         {
+            const HAS_WORLD : bool = $( $param::IS_WORLD || ) * false;
+            const NUM_PARAMS: usize = $(count_params::<$param>() + )* 0;
+
             type SystemType = SystemContainer<FUN, ($($param,)*)>;
 
             fn into_system(self) -> Self::SystemType {
+                if Self::HAS_WORLD && Self::NUM_PARAMS > 1 {
+                    panic!("If a system has a parameter of &mut World, then that parameter must be the only parameter");
+                }
+
                 SystemContainer::new(self, Cow::Borrowed(std::any::type_name::<FUN>()))
             }
         }
@@ -219,6 +236,10 @@ impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13 O:14);
 impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13 O:14 P:15);
 impl_system!(A:0 B:1 C:2 D:3 E:4 F:5 G:6 H:7 I:8 J:9 K:10 L:11 M:12 N:13 O:14 P:15 Q:16);
 
+const fn count_params<A>() -> usize {
+    1
+}
+
 fn add_dependencies(
     param_deps: SparseSet<ComponentId, AccessMode>,
     system_deps: &mut SparseSet<ComponentId, AccessMode>,
@@ -236,6 +257,7 @@ fn add_dependencies(
 
 impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rworld, 'res, R> {
     type State = ();
+    const IS_WORLD: bool = false;
 
     fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
         let id = store.get_component_id_assertive::<R>();
@@ -283,6 +305,7 @@ impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rw
 
 impl<'rworld, 'res, R: Resource + 'static> SystemParam for ResMut<'rworld, 'res, R> {
     type State = ();
+    const IS_WORLD: bool = false;
 
     fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
         let id = store.get_component_id_assertive::<R>();

@@ -4,8 +4,8 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use petgraph::dot::Dot;
-use petgraph::graph::{Node, NodeIndex};
-use petgraph::visit::{EdgeRef, IntoEdgesDirected};
+use petgraph::graph::NodeIndex;
+use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Graph};
 
 use crate::query::AccessMode;
@@ -99,8 +99,6 @@ unsafe impl Scheduler for GraphScheduler {
         world: &mut World,
         system: S,
     ) -> Self::SystemId {
-        let world_id = world.get_or_create_component_id::<World>();
-
         let mut system = system.into_system();
         system.init(world);
 
@@ -463,7 +461,7 @@ mod tests {
     }
 
     /// System A, B, C read from the same component but write to different components
-    /// then F writes to the world while reading B's result
+    /// then F writes to the world
     /// Finally D uses A's result with a non-send resource
     /// The schedule should be (A, B, C) -> (F) -> (D)
     #[test]
@@ -479,7 +477,7 @@ mod tests {
         fn sys_a(_: Query<(&SharedByABC, &mut WrittenByA)>) {}
         fn sys_b(_: Query<(&SharedByABC, &mut WrittenByB)>) {}
         fn sys_c(_: Query<(&SharedByABC, &mut WrittenByC)>) {}
-        fn exclusive_sys(_: &mut World, _: Query<&WrittenByB>) {}
+        fn exclusive_sys(_: &mut World) {}
         fn sys_d(_: Query<&WrittenByA>, _: ResMut<NonSendResource>) {}
 
         let mut world = World::new();
