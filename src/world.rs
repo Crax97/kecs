@@ -140,13 +140,13 @@ impl World {
     }
 
     pub fn add_resource<R: 'static + Send + Sync + Resource>(&mut self, resource: R) {
-        let id = self.get_component_id_mut::<R>();
+        let id = self.get_or_create_component_id::<R>();
         self.resource_sendness.insert(id, true);
         self.send_resources.add(id, resource);
     }
 
     pub fn add_non_send_resource<R: 'static + Resource>(&mut self, resource: R) {
-        let id = self.get_component_id_mut::<R>();
+        let id = self.get_or_create_component_id::<R>();
         self.resource_sendness.insert(id, false);
         self.non_send_resources.add(id, resource);
     }
@@ -252,7 +252,7 @@ impl World {
         self.entity_info.get(&entity)
     }
 
-    pub fn get_component_id_mut<A: 'static>(&mut self) -> ComponentId {
+    pub fn get_or_create_component_id<A: 'static>(&mut self) -> ComponentId {
         ComponentId(self.registrar.get_registration::<A>())
     }
     pub fn get_component_id<A: 'static>(&self) -> Option<ComponentId> {

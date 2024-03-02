@@ -9,12 +9,14 @@ use std::{borrow::Cow, marker::PhantomData};
 
 pub trait SystemParam: Sized {
     type State: Send + Sync + 'static;
+
     fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>);
     fn create<'world, 'state>(data: &'state Self::State, store: &'world mut World) -> Self
     where
         'world: 'state;
     fn create_initial_state(store: &mut World) -> Self::State;
     fn on_entity_changed(state: &mut Self::State, store: &World, entity: Entity, info: &EntityInfo);
+    fn is_exclusive(world: &World) -> bool;
 }
 pub trait System: Send + Sync + 'static {
     fn get_name(&self) -> Cow<'static, str>;
@@ -22,6 +24,7 @@ pub trait System: Send + Sync + 'static {
     fn run(&mut self, store: &mut World);
     fn compute_dependencies(&self, world: &mut World) -> SparseSet<ComponentId, AccessMode>;
     fn on_entity_changed(&mut self, store: &World, entity: Entity, info: &EntityInfo);
+    fn is_exclusive(&self, world: &World) -> bool;
 }
 
 pub trait IntoSystem<ARGS> {
@@ -73,6 +76,40 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
         } else {
             state.entities.remove(&entity);
         }
+    }
+
+    fn is_exclusive(world: &World) -> bool {
+        false
+    }
+}
+
+impl SystemParam for &mut World {
+    type State = ();
+
+    fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
+        let id_of_world = store.get_or_create_component_id::<World>();
+        components.insert(id_of_world, AccessMode::Write);
+    }
+
+    fn create<'world, 'state>(_data: &'state Self::State, store: &'world mut World) -> Self
+    where
+        'world: 'state,
+    {
+        unsafe { std::mem::transmute(store) }
+    }
+
+    fn create_initial_state(_store: &mut World) -> Self::State {}
+
+    fn on_entity_changed(
+        _state: &mut Self::State,
+        _store: &World,
+        _entity: Entity,
+        _info: &EntityInfo,
+    ) {
+    }
+
+    fn is_exclusive(_world: &World) -> bool {
+        true
     }
 }
 
@@ -141,6 +178,13 @@ macro_rules! impl_system {
                 }
                 )*
                 deps
+            }
+
+            fn is_exclusive(&self, world: &World) -> bool
+            {
+                $(
+                    $param::is_exclusive(world) ||
+                )* false
             }
         }
 
@@ -227,6 +271,14 @@ impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rw
         _info: &EntityInfo,
     ) {
     }
+
+    fn is_exclusive(world: &World) -> bool {
+        let id = world.get_component_id_assertive::<R>();
+        !world
+            .resource_sendness
+            .get(&id)
+            .expect("Failed to find component! Register it first")
+    }
 }
 
 impl<'rworld, 'res, R: Resource + 'static> SystemParam for ResMut<'rworld, 'res, R> {
@@ -265,5 +317,13 @@ impl<'rworld, 'res, R: Resource + 'static> SystemParam for ResMut<'rworld, 'res,
         _entity: Entity,
         _info: &EntityInfo,
     ) {
+    }
+
+    fn is_exclusive(world: &World) -> bool {
+        let id = world.get_component_id_assertive::<R>();
+        !world
+            .resource_sendness
+            .get(&id)
+            .expect("Failed to find component! Register it first")
     }
 }

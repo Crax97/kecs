@@ -4,8 +4,8 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use petgraph::dot::Dot;
-use petgraph::graph::NodeIndex;
-use petgraph::visit::EdgeRef;
+use petgraph::graph::{Node, NodeIndex};
+use petgraph::visit::{EdgeRef, IntoEdgesDirected};
 use petgraph::{Directed, Graph};
 
 use crate::query::AccessMode;
@@ -99,60 +99,88 @@ unsafe impl Scheduler for GraphScheduler {
         world: &mut World,
         system: S,
     ) -> Self::SystemId {
+        let world_id = world.get_or_create_component_id::<World>();
+
         let mut system = system.into_system();
         system.init(world);
+
+        let system_is_exclusive = system.is_exclusive(world);
+
         let system_dependencies = system.compute_dependencies(world);
 
         let system_node = SystemGraphNode {
             system: Some(Box::new(system)),
             dependencies: system_dependencies.clone(),
         };
-        let node = self.graph.add_node(system_node);
-        let mut node_dependencies = HashMap::<NodeIndex, SystemGraphEdge>::new();
-        for (component, ownership) in self.current_dependencies.iter() {
-            if let Some(sys_access) = system_dependencies.get(&component) {
-                if *sys_access != ownership.access_mode
-                    || (*sys_access == AccessMode::Write
-                        && ownership.access_mode == AccessMode::Write)
-                {
-                    // Dependency: the access mode changes or the previous system writes to the same components
-                    // of the new system
-                    node_dependencies
-                        .entry(ownership.system_node)
-                        .or_default()
-                        .changes
-                        .push(SystemGraphChange {
-                            component,
-                            new_access_mode: *sys_access,
-                        });
-                }
-            }
-        }
+        let system_node_idx = self.graph.add_node(system_node);
 
-        if node_dependencies.is_empty() {
-            for (component, access) in system_dependencies.iter() {
-                self.current_dependencies.insert(
-                    component,
-                    GraphResourceOwnership {
-                        access_mode: *access,
-                        system_node: node,
-                    },
-                );
+        if system_is_exclusive {
+            let leaves: HashSet<NodeIndex> = self
+                .graph
+                .node_indices()
+                .filter(|&node| {
+                    node != system_node_idx
+                        && self
+                            .graph
+                            .edges_directed(node, petgraph::Direction::Outgoing)
+                            .next()
+                            .is_none()
+                })
+                .collect();
+            for leaf in leaves {
+                self.graph
+                    .add_edge(leaf, system_node_idx, SystemGraphEdge { changes: vec![] });
             }
-            self.graph
-                .add_edge(self.root_node_idx, node, SystemGraphEdge::default());
         } else {
-            for (owner, changes) in node_dependencies {
-                for change in &changes.changes {
-                    let dep = self.current_dependencies.get_mut(change.component).unwrap();
-                    dep.access_mode = change.new_access_mode;
-                    dep.system_node = node;
+            let mut node_dependencies = HashMap::<NodeIndex, SystemGraphEdge>::new();
+            for (component, ownership) in self.current_dependencies.iter() {
+                if let Some(sys_access) = system_dependencies.get(&component) {
+                    if *sys_access != ownership.access_mode
+                        || (*sys_access == AccessMode::Write
+                            && ownership.access_mode == AccessMode::Write)
+                    {
+                        // Dependency: the access mode changes or the previous system writes to the same components
+                        // of the new system
+                        node_dependencies
+                            .entry(ownership.system_node)
+                            .or_default()
+                            .changes
+                            .push(SystemGraphChange {
+                                component,
+                                new_access_mode: *sys_access,
+                            });
+                    }
                 }
-                self.graph.add_edge(owner, node, changes);
+            }
+
+            if node_dependencies.is_empty() {
+                for (component, access) in system_dependencies.iter() {
+                    self.current_dependencies.insert(
+                        component,
+                        GraphResourceOwnership {
+                            access_mode: *access,
+                            system_node: system_node_idx,
+                        },
+                    );
+                }
+                self.graph.add_edge(
+                    self.root_node_idx,
+                    system_node_idx,
+                    SystemGraphEdge::default(),
+                );
+            } else {
+                for (owner, changes) in node_dependencies {
+                    for change in &changes.changes {
+                        let dep = self.current_dependencies.get_mut(change.component).unwrap();
+                        dep.access_mode = change.new_access_mode;
+                        dep.system_node = system_node_idx;
+                    }
+                    self.graph.add_edge(owner, system_node_idx, changes);
+                }
             }
         }
         self.changed_schedule = true;
-        node
+        system_node_idx
     }
 
     fn execute(&mut self, world: &mut World) {
@@ -291,7 +319,11 @@ impl std::fmt::Display for SystemGraphEdge {
 #[cfg(test)]
 mod tests {
 
-    use crate::{query::Query, World};
+    use crate::{
+        query::Query,
+        resources::{ResMut, Resource},
+        World,
+    };
 
     use super::{GraphScheduler, Scheduler};
 
@@ -306,6 +338,7 @@ mod tests {
 
     fn read_component_1(_: Query<&Component1>) {}
     fn read_component_2(_: Query<&Component2>) {}
+    fn non_parallel_system(_: &mut World, _: Query<&Component1>) {}
     fn read_write_component_1(_: Query<&Component1>, _: Query<&mut Component1>) {}
 
     #[test]
@@ -408,5 +441,68 @@ mod tests {
         assert!(schedule.groups[0].jobs.contains(&system_0));
         assert!(schedule.groups[1].jobs.contains(&system_1));
         assert!(schedule.groups[2].jobs.contains(&system_2));
+    }
+
+    #[test]
+    fn non_parallel_world() {
+        let mut world = World::new();
+        let mut scheduler = GraphScheduler::new();
+
+        let system_0 = scheduler.add_system(&mut world, read_component_1);
+
+        // If a system takes a &mut World, it's an exclusive system: it cannot be run in parallel in any case
+        let system_1 = scheduler.add_system(&mut world, non_parallel_system);
+
+        let schedule = scheduler.compute_schedule();
+
+        scheduler.print_jobs();
+        assert_eq!(schedule.groups.len(), 2);
+
+        assert!(schedule.groups[0].jobs.contains(&system_0));
+        assert!(schedule.groups[1].jobs.contains(&system_1));
+    }
+
+    /// System A, B, C read from the same component but write to different components
+    /// then F writes to the world while reading B's result
+    /// Finally D uses A's result with a non-send resource
+    /// The schedule should be (A, B, C) -> (F) -> (D)
+    #[test]
+    fn multi_nodes() {
+        struct SharedByABC;
+        struct WrittenByA;
+        struct WrittenByB;
+        struct WrittenByC;
+
+        struct NonSendResource;
+        impl Resource for NonSendResource {}
+
+        fn sys_a(_: Query<(&SharedByABC, &mut WrittenByA)>) {}
+        fn sys_b(_: Query<(&SharedByABC, &mut WrittenByB)>) {}
+        fn sys_c(_: Query<(&SharedByABC, &mut WrittenByC)>) {}
+        fn exclusive_sys(_: &mut World, _: Query<&WrittenByB>) {}
+        fn sys_d(_: Query<&WrittenByA>, _: ResMut<NonSendResource>) {}
+
+        let mut world = World::new();
+        let mut scheduler = GraphScheduler::new();
+
+        // Register  first the resource
+        world.add_non_send_resource(NonSendResource);
+
+        let sys_a_id = scheduler.add_system(&mut world, sys_a);
+        let sys_b_id = scheduler.add_system(&mut world, sys_b);
+        let sys_c_id = scheduler.add_system(&mut world, sys_c);
+        let sys_f_id = scheduler.add_system(&mut world, exclusive_sys);
+        let sys_d_id = scheduler.add_system(&mut world, sys_d);
+
+        let schedule = scheduler.compute_schedule();
+
+        scheduler.print_jobs();
+        assert_eq!(schedule.groups.len(), 3);
+
+        assert!(schedule.groups[0].jobs.contains(&sys_a_id));
+        assert!(schedule.groups[0].jobs.contains(&sys_b_id));
+        assert!(schedule.groups[0].jobs.contains(&sys_c_id));
+        assert!(schedule.groups[1].jobs.contains(&sys_f_id));
+        assert!(schedule.groups[2].jobs.contains(&sys_d_id));
     }
 }

@@ -83,7 +83,7 @@ where
         store: &mut World,
         component_set: &mut SparseSet<ComponentId, AccessMode>,
     ) {
-        let id = store.get_component_id_mut::<A>();
+        let id = store.get_or_create_component_id::<A>();
         if !component_set.insert(id, AccessMode::Read) {
             panic!("Query accesses twice the same component type! This is not allowed");
         }
@@ -105,7 +105,7 @@ where
         store: &mut World,
         component_set: &mut SparseSet<ComponentId, AccessMode>,
     ) {
-        let id = store.get_component_id_mut::<A>();
+        let id = store.get_or_create_component_id::<A>();
         if !component_set.insert(id, AccessMode::Write) {
             panic!("Query accesses twice the same component type! This is not allowed");
         }
