@@ -94,11 +94,9 @@ fn print_player_position(query: Query<(&Player, Entity, &EntityName, &Transform)
 
 4. Schedule the systems for execution
 ```rust
-
-    let mut scheduler = GraphScheduler::new();
-    scheduler.add_system(&mut world, update_bullet_position);
-    scheduler.add_system(&mut world, print_transform_system);
-    scheduler.add_system(&mut world, print_player_position);
+    world.add_system(update_bullet_position);
+    world.add_system(print_transform_system);
+    world.add_system(print_player_position);
 
 ```
 
@@ -108,7 +106,7 @@ fn print_player_position(query: Query<(&Player, Entity, &EntityName, &Transform)
     // In real code this should belong in an event loop
     for i in 0..3 {
         println!("Frame {i}");
-        scheduler.execute(&mut world);
+        world.update();
         println!("\n\n");
     }
 ```
