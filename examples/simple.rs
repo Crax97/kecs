@@ -1,4 +1,4 @@
-use kecs::{Entity, GraphScheduler, Query, Scheduler, World};
+use kecs::{Entity, GraphScheduler, KecsWorld, Query};
 
 #[derive(Debug)]
 struct EntityName(String);
@@ -43,7 +43,7 @@ fn print_player_position(query: Query<(&Player, Entity, &EntityName, &Transform)
 }
 
 fn main() {
-    let mut world = World::new();
+    let mut world = KecsWorld::<GraphScheduler>::new();
 
     {
         let bullet_entity = world.new_entity();
@@ -76,19 +76,14 @@ fn main() {
         world.add_component(player_entity, EntityName("Player".to_owned()));
     }
 
-    let mut scheduler = GraphScheduler::new();
-    scheduler.add_system(&mut world, update_bullet_position);
-    scheduler.add_system(&mut world, print_player_position);
-    scheduler.add_system(&mut world, print_transform_system);
-
-    // To see how your systems are scheduled with the GraphScheduler you can use this function
-    // to print the execution graph in the Dot format
-    scheduler.print_jobs();
+    world.add_system(update_bullet_position);
+    world.add_system(print_player_position);
+    world.add_system(print_transform_system);
 
     // In real code this should belong in an event loop
     for i in 0..3 {
         println!("Frame {i}");
-        scheduler.execute(&mut world);
+        world.update();
         println!("\n\n");
     }
 }

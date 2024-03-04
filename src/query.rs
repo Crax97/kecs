@@ -1,8 +1,8 @@
 use std::{collections::HashSet, marker::PhantomData};
 
 use crate::{
-    archetype::ArchetypeId, sparse_set::SparseSet, world::World, ComponentId, Entity,
-    UnsafeWorldPtr,
+    archetype::ArchetypeId, sparse_set::SparseSet, world_container::WorldContainer, ComponentId,
+    Entity, UnsafeWorldPtr,
 };
 
 #[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash, Debug)]
@@ -13,10 +13,10 @@ pub enum AccessMode {
 
 pub trait QueryParam {
     fn compute_component_set(
-        store: &mut World,
+        store: &mut WorldContainer,
         component_set: &mut SparseSet<ComponentId, AccessMode>,
     );
-    fn can_extract(store: &World, entity: Entity) -> bool;
+    fn can_extract(store: &WorldContainer, entity: Entity) -> bool;
     unsafe fn extract(store: &UnsafeWorldPtr, entity: Entity) -> Self;
 }
 
@@ -68,11 +68,11 @@ impl<'world, 'state, A: QueryParam> Iterator for QueryIterator<'world, 'state, A
 }
 impl QueryParam for Entity {
     fn compute_component_set(
-        _store: &mut World,
+        _store: &mut WorldContainer,
         _component_set: &mut SparseSet<ComponentId, AccessMode>,
     ) {
     }
-    fn can_extract(_store: &World, _entity: Entity) -> bool {
+    fn can_extract(_store: &WorldContainer, _entity: Entity) -> bool {
         true
     }
     unsafe fn extract(_store: &UnsafeWorldPtr, entity: Entity) -> Self {
@@ -88,12 +88,12 @@ where
         std::mem::transmute(store.get_component::<A>(entity).get())
     }
 
-    fn can_extract(store: &World, entity: Entity) -> bool {
+    fn can_extract(store: &WorldContainer, entity: Entity) -> bool {
         store.entity_has_component::<A>(entity)
     }
 
     fn compute_component_set(
-        store: &mut World,
+        store: &mut WorldContainer,
         component_set: &mut SparseSet<ComponentId, AccessMode>,
     ) {
         let id = store.get_or_create_component_id::<A>();
@@ -111,11 +111,11 @@ where
         std::mem::transmute(store.get_component_mut::<A>(entity))
     }
 
-    fn can_extract(store: &World, entity: Entity) -> bool {
+    fn can_extract(store: &WorldContainer, entity: Entity) -> bool {
         store.entity_has_component::<A>(entity)
     }
     fn compute_component_set(
-        store: &mut World,
+        store: &mut WorldContainer,
         component_set: &mut SparseSet<ComponentId, AccessMode>,
     ) {
         let id = store.get_or_create_component_id::<A>();
@@ -135,10 +135,10 @@ macro_rules! impl_query_for_tuple {
                 ($($t::extract(store, entity),)*)
             }
 
-            fn can_extract(store: &World, entity: Entity) -> bool {
+            fn can_extract(store: &WorldContainer, entity: Entity) -> bool {
                 $($t::can_extract(store, entity) &&)* true
             }
-            fn compute_component_set(store: &mut World, component_set: &mut SparseSet<ComponentId, AccessMode>) {
+            fn compute_component_set(store: &mut WorldContainer, component_set: &mut SparseSet<ComponentId, AccessMode>) {
                 $($t::compute_component_set(store, component_set);)*
             }
         }

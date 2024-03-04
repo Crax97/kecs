@@ -7,7 +7,7 @@ use std::{
 use crate::{
     erased_data_vec::{ErasedVec, UnsafeMutPtr, UnsafePtr},
     sparse_set::SparseSet,
-    ComponentId, World,
+    ComponentId, WorldContainer,
 };
 
 pub trait Resource: 'static {}
@@ -25,7 +25,7 @@ where
     'world: 'res,
 {
     _ph: PhantomData<&'res T>,
-    _ph_world: PhantomData<&'world World>,
+    _ph_world: PhantomData<&'world WorldContainer>,
     ptr: UnsafePtr<'res, T>,
 }
 
@@ -34,7 +34,7 @@ where
     'world: 'res,
 {
     _ph: PhantomData<&'res T>,
-    _ph_world: PhantomData<&'world World>,
+    _ph_world: PhantomData<&'world WorldContainer>,
     ptr: UnsafeMutPtr<'res, T>,
 }
 

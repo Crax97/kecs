@@ -12,24 +12,26 @@ use petgraph::{Directed, Graph};
 use crate::query::AccessMode;
 use crate::sparse_set::SparseSet;
 use crate::system::{IntoSystem, System};
-use crate::{ComponentId, World};
+use crate::{ComponentId, Entity, WorldContainer};
 
 /// # Safety
 ///   The implementer must ensure that:
 ///   1. All resource accesses must respect Rust's borrowing rules: only one mutable access can be present
 ///      for each component/resource (even across threads), and if there's any non mutable access
 ///      then no mutable access must be performed on the resource
-pub unsafe trait Scheduler {
+pub unsafe trait Scheduler: Default {
     type SystemId: Sized + Eq + PartialEq + Ord + PartialOrd + Hash + Copy + Clone + Debug;
 
     fn new() -> Self;
     fn add_system<ARGS, S: IntoSystem<ARGS>>(
         &mut self,
-        world: &mut World,
+        world: &mut WorldContainer,
         system: S,
     ) -> Self::SystemId;
 
-    fn execute(&mut self, world: &mut World);
+    fn execute(&mut self, world: &mut WorldContainer);
+
+    fn on_entity_updated(&mut self, world: &mut WorldContainer, entity: Entity);
 }
 
 /// This scheduler runs all the systems on the same thread sequentially
@@ -45,6 +47,12 @@ pub struct GraphScheduler {
     cached_schedule: Schedules,
 }
 
+impl Default for GraphScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// # Safety
 ///   Since the systems are scheduled to be run sequentially, only one system at a time can access the system's resources
 unsafe impl Scheduler for LinearScheduler {
@@ -56,7 +64,7 @@ unsafe impl Scheduler for LinearScheduler {
 
     fn add_system<ARGS, S: IntoSystem<ARGS>>(
         &mut self,
-        world: &mut World,
+        world: &mut WorldContainer,
         system: S,
     ) -> Self::SystemId {
         let id = self.systems.len();
@@ -67,10 +75,19 @@ unsafe impl Scheduler for LinearScheduler {
         id
     }
 
-    fn execute(&mut self, world: &mut World) {
+    fn execute(&mut self, world: &mut WorldContainer) {
         for system in self.systems.iter_mut() {
             system.run(world);
         }
+    }
+
+    fn on_entity_updated(&mut self, world: &mut WorldContainer, entity: Entity) {
+        let info = world
+            .get_entity_info(entity)
+            .expect("Failed to find entity info");
+        self.systems
+            .iter_mut()
+            .for_each(|s| s.on_entity_changed(world, entity, info))
     }
 }
 
@@ -97,7 +114,7 @@ unsafe impl Scheduler for GraphScheduler {
 
     fn add_system<ARGS, S: IntoSystem<ARGS>>(
         &mut self,
-        world: &mut World,
+        world: &mut WorldContainer,
         system: S,
     ) -> Self::SystemId {
         let mut system = system.into_system();
@@ -131,7 +148,7 @@ unsafe impl Scheduler for GraphScheduler {
         system_node_idx
     }
 
-    fn execute(&mut self, world: &mut World) {
+    fn execute(&mut self, world: &mut WorldContainer) {
         if self.changed_schedule {
             self.cached_schedule = self.compute_schedule();
             self.changed_schedule = false;
@@ -144,6 +161,17 @@ unsafe impl Scheduler for GraphScheduler {
                 }
             }
         }
+    }
+
+    fn on_entity_updated(&mut self, world: &mut WorldContainer, entity: Entity) {
+        let info = world
+            .get_entity_info(entity)
+            .expect("Failed to find entity info");
+        self.graph.node_weights_mut().for_each(|s| {
+            if let Some(s) = &mut s.system {
+                s.on_entity_changed(world, entity, info)
+            }
+        })
     }
 }
 
@@ -403,7 +431,7 @@ mod tests {
     use crate::{
         query::Query,
         resources::{ResMut, Resource},
-        Entity, World,
+        Entity, WorldContainer,
     };
 
     use super::{GraphScheduler, Scheduler};
@@ -419,7 +447,7 @@ mod tests {
 
     fn read_component_1(_: Query<&Component1>) {}
     fn read_component_2(_: Query<&Component2>) {}
-    fn non_parallel_system(_: &mut World) {}
+    fn non_parallel_system(_: &mut WorldContainer) {}
     fn read_write_component_1(_: Query<&Component1>, _: Query<&mut Component1>) {}
 
     #[test]
@@ -432,7 +460,7 @@ mod tests {
 
     #[test]
     fn write_then_read() {
-        let mut world = World::new();
+        let mut world = WorldContainer::new();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, write_component_1);
@@ -446,7 +474,7 @@ mod tests {
 
     #[test]
     fn disjoint_systems() {
-        let mut world = World::new();
+        let mut world = WorldContainer::new();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, write_component_1);
@@ -462,7 +490,7 @@ mod tests {
 
     #[test]
     fn parallel_read() {
-        let mut world = World::new();
+        let mut world = WorldContainer::new();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, read_component_1);
@@ -476,7 +504,7 @@ mod tests {
 
     #[test]
     fn parallel_write() {
-        let mut world = World::new();
+        let mut world = WorldContainer::new();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, write_component_1);
@@ -490,7 +518,7 @@ mod tests {
 
     #[test]
     fn read_then_write() {
-        let mut world = World::new();
+        let mut world = WorldContainer::new();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, read_component_1);
@@ -504,7 +532,7 @@ mod tests {
 
     #[test]
     fn read_then_write_same_query() {
-        let mut world = World::new();
+        let mut world = WorldContainer::new();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, read_component_1);
@@ -526,7 +554,7 @@ mod tests {
 
     #[test]
     fn non_parallel_world() {
-        let mut world = World::new();
+        let mut world = WorldContainer::new();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, read_component_1);
@@ -560,10 +588,10 @@ mod tests {
         fn sys_a(_: Query<(&SharedByABC, &mut WrittenByA)>) {}
         fn sys_b(_: Query<(&SharedByABC, &mut WrittenByB)>) {}
         fn sys_c(_: Query<(&SharedByABC, &mut WrittenByC)>) {}
-        fn exclusive_sys(_: &mut World) {}
+        fn exclusive_sys(_: &mut WorldContainer) {}
         fn sys_d(_: Query<&WrittenByA>, _: ResMut<NonSendResource>) {}
 
-        let mut world = World::new();
+        let mut world = WorldContainer::new();
         let mut scheduler = GraphScheduler::new();
 
         // Register  first the resource
@@ -631,7 +659,7 @@ mod tests {
             }
         }
 
-        let mut world = World::new();
+        let mut world = WorldContainer::new();
         let mut scheduler = GraphScheduler::new();
         let update = scheduler.add_system(&mut world, update_bullet_position);
         let print_1 = scheduler.add_system(&mut world, print_player_position);
@@ -653,7 +681,7 @@ mod tests {
         fn sys_write_a(_: Query<&mut TestComponentA>) {}
         fn sys_read_a(_: Query<&TestComponentA>) {}
 
-        let mut world = World::new();
+        let mut world = WorldContainer::new();
         let mut scheduler = GraphScheduler::new();
 
         let sys_1 = scheduler.add_system(&mut world, sys_write_a);

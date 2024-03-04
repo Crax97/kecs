@@ -3,7 +3,7 @@ use crate::{
     query::{AccessMode, Query, QueryParam, QueryState},
     resources::{Res, ResMut, Resource},
     sparse_set::SparseSet,
-    ComponentId, Entity, EntityInfo, World,
+    ComponentId, Entity, EntityInfo, WorldContainer,
 };
 use std::{borrow::Cow, marker::PhantomData};
 
@@ -11,21 +11,32 @@ pub trait SystemParam: Sized {
     type State: Send + Sync + 'static;
     const IS_WORLD: bool;
 
-    fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>);
-    fn create<'world, 'state>(data: &'state Self::State, store: &'world mut World) -> Self
+    fn add_dependencies(
+        store: &mut WorldContainer,
+        components: &mut SparseSet<ComponentId, AccessMode>,
+    );
+    fn create<'world, 'state>(data: &'state Self::State, store: &'world mut WorldContainer) -> Self
     where
         'world: 'state;
-    fn create_initial_state(store: &mut World) -> Self::State;
-    fn on_entity_changed(state: &mut Self::State, store: &World, entity: Entity, info: &EntityInfo);
-    fn is_exclusive(world: &World) -> bool;
+    fn create_initial_state(store: &mut WorldContainer) -> Self::State;
+    fn on_entity_changed(
+        state: &mut Self::State,
+        store: &WorldContainer,
+        entity: Entity,
+        info: &EntityInfo,
+    );
+    fn is_exclusive(world: &WorldContainer) -> bool;
 }
 pub trait System: Send + Sync + 'static {
     fn get_name(&self) -> Cow<'static, str>;
-    fn init(&mut self, store: &mut World);
-    fn run(&mut self, store: &mut World);
-    fn compute_dependencies(&self, world: &mut World) -> SparseSet<ComponentId, AccessMode>;
-    fn on_entity_changed(&mut self, store: &World, entity: Entity, info: &EntityInfo);
-    fn is_exclusive(&self, world: &World) -> bool;
+    fn init(&mut self, store: &mut WorldContainer);
+    fn run(&mut self, store: &mut WorldContainer);
+    fn compute_dependencies(
+        &self,
+        world: &mut WorldContainer,
+    ) -> SparseSet<ComponentId, AccessMode>;
+    fn on_entity_changed(&mut self, store: &WorldContainer, entity: Entity, info: &EntityInfo);
+    fn is_exclusive(&self, world: &WorldContainer) -> bool;
 }
 
 pub trait IntoSystem<ARGS> {
@@ -40,10 +51,13 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
     type State = QueryState;
     const IS_WORLD: bool = false;
 
-    fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
+    fn add_dependencies(
+        store: &mut WorldContainer,
+        components: &mut SparseSet<ComponentId, AccessMode>,
+    ) {
         A::compute_component_set(store, components);
     }
-    fn create<'world, 'state>(data: &'state Self::State, store: &'world mut World) -> Self
+    fn create<'world, 'state>(data: &'state Self::State, store: &'world mut WorldContainer) -> Self
     where
         'world: 'state,
     {
@@ -51,7 +65,7 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
         unsafe { std::mem::transmute(Query::<'_, '_, A>::create_query(data, store.get_mut_ptr())) }
     }
 
-    fn create_initial_state(store: &mut World) -> Self::State {
+    fn create_initial_state(store: &mut WorldContainer) -> Self::State {
         let mut component_set = Default::default();
         Self::add_dependencies(store, &mut component_set);
 
@@ -66,7 +80,7 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
 
     fn on_entity_changed(
         state: &mut Self::State,
-        store: &World,
+        store: &WorldContainer,
         entity: Entity,
         info: &EntityInfo,
     ) {
@@ -84,38 +98,41 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
         }
     }
 
-    fn is_exclusive(_world: &World) -> bool {
+    fn is_exclusive(_world: &WorldContainer) -> bool {
         false
     }
 }
 
-impl SystemParam for &mut World {
+impl SystemParam for &mut WorldContainer {
     type State = ();
     const IS_WORLD: bool = true;
 
-    fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
-        let id_of_world = store.get_or_create_component_id::<World>();
+    fn add_dependencies(
+        store: &mut WorldContainer,
+        components: &mut SparseSet<ComponentId, AccessMode>,
+    ) {
+        let id_of_world = store.get_or_create_component_id::<WorldContainer>();
         components.insert(id_of_world, AccessMode::Write);
     }
 
-    fn create<'world, 'state>(_data: &'state Self::State, store: &'world mut World) -> Self
+    fn create<'world, 'state>(_data: &'state Self::State, store: &'world mut WorldContainer) -> Self
     where
         'world: 'state,
     {
         unsafe { std::mem::transmute(store) }
     }
 
-    fn create_initial_state(_store: &mut World) -> Self::State {}
+    fn create_initial_state(_store: &mut WorldContainer) -> Self::State {}
 
     fn on_entity_changed(
         _state: &mut Self::State,
-        _store: &World,
+        _store: &WorldContainer,
         _entity: Entity,
         _info: &EntityInfo,
     ) {
     }
 
-    fn is_exclusive(_world: &World) -> bool {
+    fn is_exclusive(_world: &WorldContainer) -> bool {
         true
     }
 }
@@ -150,7 +167,7 @@ macro_rules! impl_system {
                 self.fun_name.clone()
             }
 
-            fn init(&mut self, store: &mut World) {
+            fn init(&mut self, store: &mut WorldContainer) {
                 $(
                 self.system_data.push({
                     let mut erased = unsafe { ErasedVec::new_typed::<$param::State>(true, 1) };
@@ -165,11 +182,11 @@ macro_rules! impl_system {
                 }
             }
 
-            fn run(&mut self, store: &mut World) {
+            fn run(&mut self, store: &mut WorldContainer) {
                 (self.fun)($($param::create(unsafe { self.system_data[$idx].get::<$param::State>(0) }, store),)*);
             }
 
-            fn on_entity_changed(&mut self, store: &World, entity: Entity, info: &EntityInfo) {
+            fn on_entity_changed(&mut self, store: &WorldContainer, entity: Entity, info: &EntityInfo) {
                 {
                     $(
                         let state = unsafe { self.system_data[$idx].get_mut::<$param::State>(0) };
@@ -178,7 +195,7 @@ macro_rules! impl_system {
                 }
             }
 
-            fn compute_dependencies(&self, world: &mut World) -> SparseSet<ComponentId, AccessMode> {
+            fn compute_dependencies(&self, world: &mut WorldContainer) -> SparseSet<ComponentId, AccessMode> {
                 let mut deps = Default::default();
                 $(
                 {
@@ -190,7 +207,7 @@ macro_rules! impl_system {
                 deps
             }
 
-            fn is_exclusive(&self, world: &World) -> bool
+            fn is_exclusive(&self, world: &WorldContainer) -> bool
             {
                 $(
                     $param::is_exclusive(world) ||
@@ -209,7 +226,7 @@ macro_rules! impl_system {
 
             fn into_system(self) -> Self::SystemType {
                 if Self::HAS_WORLD && Self::NUM_PARAMS > 1 {
-                    panic!("If a system has a parameter of &mut World, then that parameter must be the only parameter");
+                    panic!("If a system has a parameter of &mut WorldContainer, then that parameter must be the only parameter");
                 }
 
                 SystemContainer::new(self, Cow::Borrowed(std::any::type_name::<FUN>()))
@@ -260,12 +277,15 @@ impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rw
     type State = ();
     const IS_WORLD: bool = false;
 
-    fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
+    fn add_dependencies(
+        store: &mut WorldContainer,
+        components: &mut SparseSet<ComponentId, AccessMode>,
+    ) {
         let id = store.get_component_id_assertive::<R>();
         components.insert(id, AccessMode::Read);
     }
 
-    fn create<'world, 'state>(_data: &'state Self::State, store: &'world mut World) -> Self
+    fn create<'world, 'state>(_data: &'state Self::State, store: &'world mut WorldContainer) -> Self
     where
         'world: 'state,
     {
@@ -285,17 +305,17 @@ impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rw
         }
     }
 
-    fn create_initial_state(_store: &mut World) -> Self::State {}
+    fn create_initial_state(_store: &mut WorldContainer) -> Self::State {}
 
     fn on_entity_changed(
         _state: &mut Self::State,
-        _store: &World,
+        _store: &WorldContainer,
         _entity: Entity,
         _info: &EntityInfo,
     ) {
     }
 
-    fn is_exclusive(world: &World) -> bool {
+    fn is_exclusive(world: &WorldContainer) -> bool {
         let id = world.get_component_id_assertive::<R>();
         !world
             .resource_sendness
@@ -308,12 +328,15 @@ impl<'rworld, 'res, R: Resource + 'static> SystemParam for ResMut<'rworld, 'res,
     type State = ();
     const IS_WORLD: bool = false;
 
-    fn add_dependencies(store: &mut World, components: &mut SparseSet<ComponentId, AccessMode>) {
+    fn add_dependencies(
+        store: &mut WorldContainer,
+        components: &mut SparseSet<ComponentId, AccessMode>,
+    ) {
         let id = store.get_component_id_assertive::<R>();
         components.insert(id, AccessMode::Read);
     }
 
-    fn create<'world, 'state>(_data: &'state Self::State, store: &'world mut World) -> Self
+    fn create<'world, 'state>(_data: &'state Self::State, store: &'world mut WorldContainer) -> Self
     where
         'world: 'state,
     {
@@ -333,17 +356,17 @@ impl<'rworld, 'res, R: Resource + 'static> SystemParam for ResMut<'rworld, 'res,
         }
     }
 
-    fn create_initial_state(_store: &mut World) -> Self::State {}
+    fn create_initial_state(_store: &mut WorldContainer) -> Self::State {}
 
     fn on_entity_changed(
         _state: &mut Self::State,
-        _store: &World,
+        _store: &WorldContainer,
         _entity: Entity,
         _info: &EntityInfo,
     ) {
     }
 
-    fn is_exclusive(world: &World) -> bool {
+    fn is_exclusive(world: &WorldContainer) -> bool {
         let id = world.get_component_id_assertive::<R>();
         !world
             .resource_sendness
