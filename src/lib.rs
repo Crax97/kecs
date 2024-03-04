@@ -1,22 +1,76 @@
+#![warn(missing_docs)]
+
+//! The KECS component system is a simple [Entity-Component-System](https://en.wikipedia.org/wiki/Entity_component_system) implementation, that strives to be small.
+//!
+//! A [`crate::KecsWorld`] is an object composed of [`Entity`]s, associated to one or multiple components. These components can be interacted
+//! with by adding [`crate::System`]s to the [`crate::KecsWorld`]
+//! Here's a short example
+//! ```
+//! use kecs::{World, Query};
+//!
+//! // Components are plain Rust structs
+//! struct Foo(u32);
+//! struct Baz(u32);
+//! struct Name(String);
+//! // Create a world with the [`crate::GraphScheduler`], which allows for systems to be run in parallel
+//! let mut world = World::new();
+//!
+//! let entity = world.new_entity();
+//! world.add_component(entity, Foo(10));
+//! world.add_component(entity, Name("John".to_string()));
+//!
+//! let entity = world.new_entity();
+//! world.add_component(entity, Baz(10));
+//! world.add_component(entity, Name("Frank".to_string()));
+//!
+//! // You can iterate on multipler components by using a tuple, e.g Query<(&mut MutatedComponent, &NonMutatedComponent)>
+//! fn iter_only_foos(query: Query<&mut Foo>) {
+//!     for item in query.iter() {
+//!         item.0 = 123;
+//!     }
+//! }
+//!
+//! fn iter_only_bazs(query: Query<&mut Baz>) {
+//!     for item in query.iter() {
+//!         item.0 = 456;
+//!     }
+//! }
+//!
+//! fn print_names(query: Query<&mut Name>) {
+//!     for item in query.iter() {
+//!         println!("item name {}", item.0);
+//!     }    
+//! }
+//! world.add_system(iter_only_foos);
+//! world.add_system(iter_only_bazs);
+//! world.add_system(print_names);
+//!
+//! // Fire in the hole!
+//! world.update();
+//! ```
 mod archetype;
 mod erased_data_vec;
 mod query;
 mod resources;
 mod schedule;
-mod sparse_set;
 mod storage;
 mod system;
 mod type_registrar;
 mod world;
 mod world_container;
 
+mod sparse_set;
+
+pub use archetype::*;
 pub use query::*;
-pub use resources::{Res, Resource};
+pub use resources::{Res, ResMut, Resource};
 pub use schedule::{GraphScheduler, LinearScheduler, Scheduler};
+pub use sparse_set::SparseSet;
 pub use system::{System, SystemContainer, SystemParam};
 pub use world::*;
 pub use world_container::*;
 
+/// The suggested [`KecsWorld`] to use: the [`GraphScheduler`] will run systems in parallel when possible
 pub type World = KecsWorld<GraphScheduler>;
 
 #[cfg(test)]

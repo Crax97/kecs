@@ -5,18 +5,26 @@ use crate::{
     Entity, UnsafeWorldPtr,
 };
 
+/// This Enum is used to represent how a resource (Component, Resource) is accessed
 #[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash, Debug)]
 pub enum AccessMode {
+    /// The resource is read: multiple systems can read a resource
     Read,
+    /// The resource is written: only one system can write to a resource
     Write,
 }
 
+/// The trait shared by all types that can be used as parameters in a query
 pub trait QueryParam {
+    /// This method must be used to signal all the resources read by the parameter
     fn compute_component_set(
         store: &mut WorldContainer,
         component_set: &mut SparseSet<ComponentId, AccessMode>,
     );
+
+    /// This method can be used to further filter the entities that should be accessed by a query
     fn can_extract(store: &WorldContainer, entity: Entity) -> bool;
+
     /// # Safety
     /// The parameter must only be extracted for the entity specified, without breaking Rust's alising rules
     unsafe fn extract(store: &UnsafeWorldPtr, entity: Entity) -> Self;
@@ -62,12 +70,14 @@ pub struct Query<'world, 'state, A: QueryParam> {
     world_ptr: UnsafeWorldPtr<'world>,
 }
 
+/// The state of a [`Query`], used to e.g cache the entities that should be iterated by the [`Query`]
 #[derive(Default)]
 pub struct QueryState {
     pub(crate) entities: HashSet<Entity>,
     pub(crate) query_archetype: ArchetypeId,
 }
 
+/// An Iterator over the [`Query`] parameters.
 pub struct QueryIterator<'world, 'state, A: QueryParam> {
     _ph: PhantomData<A>,
     world_ptr: UnsafeWorldPtr<'world>,
@@ -75,7 +85,10 @@ pub struct QueryIterator<'world, 'state, A: QueryParam> {
 }
 
 impl<'world, 'state, A: QueryParam> Query<'world, 'state, A> {
-    pub fn create_query(state: &'state QueryState, world_ptr: UnsafeWorldPtr<'world>) -> Self {
+    pub(crate) fn create_query(
+        state: &'state QueryState,
+        world_ptr: UnsafeWorldPtr<'world>,
+    ) -> Self {
         Self {
             _ph: PhantomData,
             state,
@@ -83,6 +96,7 @@ impl<'world, 'state, A: QueryParam> Query<'world, 'state, A> {
         }
     }
 
+    /// Creates a [`QueryIterator`] for the entitiets matching the query parameters
     pub fn iter(&self) -> QueryIterator<'world, 'state, A> {
         QueryIterator {
             _ph: PhantomData,

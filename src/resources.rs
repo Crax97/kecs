@@ -10,6 +10,10 @@ use crate::{
     ComponentId, WorldContainer,
 };
 
+/// This is a marker trait used to identify the structs that can be used as a Resource.
+/// A Resource is a (singleton-like) object that can be accessed by systems using the
+/// [`Res`] (for non-mutable, shared access)/[`ResMut`] (for mutable, single access) system parameters.
+/// If the Resource is Non-Send, any access will be performed on the main thread
 pub trait Resource: 'static {}
 
 pub struct ResourceData<const SEND: bool> {

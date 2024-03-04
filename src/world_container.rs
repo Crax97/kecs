@@ -9,6 +9,7 @@ use crate::{
     type_registrar::{TypeRegistrar, UniqueTypeId},
 };
 
+/// The unique id of any component
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Default, Clone, Copy)]
 pub struct ComponentId(UniqueTypeId);
 
@@ -24,6 +25,9 @@ impl From<ComponentId> for usize {
     }
 }
 
+/// [`Entity`]s are the first building blocks of an ECS: they are used to associate one or more components together,
+/// on which [`crate::System`]s operate: they are implemented as an integer, which uniquely identifies the components
+/// associated to the Entity
 #[derive(Default, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct Entity(pub(crate) u32);
 
@@ -42,7 +46,10 @@ impl From<Entity> for usize {
 /// Holds all the informations about an entity, such as its ArchetypeId and the entity's components
 #[derive(Default, Clone, Debug)]
 pub struct EntityInfo {
+    /// The set of all the components belonging to this [`Entity`]
     pub components: SparseSet<ComponentId, ()>,
+
+    /// The [`ArchetypeId`] of this [`Entity`]
     pub archetype_id: ArchetypeId,
 }
 
@@ -80,7 +87,7 @@ impl WorldContainer {
     pub fn get_component<T: 'static>(&self, entity: Entity) -> Option<&T> {
         let id = self.get_component_id::<T>()?;
         let has_component = self
-            .entity_info(entity)
+            .get_entity_info(entity)
             .is_some_and(|info| info.components.contains(&id));
         if has_component {
             unsafe {
@@ -98,7 +105,7 @@ impl WorldContainer {
     pub fn get_component_mut<T: 'static>(&mut self, entity: Entity) -> Option<&mut T> {
         let id = self.get_component_id::<T>()?;
         let has_component = self
-            .entity_info(entity)
+            .get_entity_info(entity)
             .is_some_and(|info| info.components.contains(&id));
         if has_component {
             unsafe {
@@ -126,6 +133,7 @@ impl WorldContainer {
         self.non_send_resources.add(id, resource);
     }
 
+    /// Gets a reference to a resource, if it exists
     pub fn get_resource<R: Resource + 'static>(&self) -> Option<&R> {
         self.get_component_id::<R>()
             // SAFETY: This is safe because we're accessing a &R through a &World
@@ -140,6 +148,7 @@ impl WorldContainer {
             .map(|p| unsafe { std::mem::transmute::<&R, &R>(p.get()) })
     }
 
+    /// Gets a mutable reference to a resource, if it exists
     pub fn get_resource_mut<R: Resource + 'static>(&mut self) -> Option<&mut R> {
         self.get_component_id::<R>()
             // SAFETY: This is safe because we're accessing a &mut R through a &mut World
@@ -154,47 +163,49 @@ impl WorldContainer {
             .map(|mut p| unsafe { std::mem::transmute::<&mut R, &mut R>(p.get_mut()) })
     }
 
+    /// Iterates all the [`Entity`]s, along with their [`EntityInfo`]s
     pub fn iter_all_entities(&self) -> impl Iterator<Item = (Entity, &EntityInfo)> + '_ {
         self.entity_info.iter()
     }
 
-    pub fn entity_info(&self, entity: Entity) -> Option<&EntityInfo> {
-        self.entity_info.get(&entity)
-    }
-
-    pub fn get_or_create_component_id<A: 'static>(&mut self) -> ComponentId {
-        ComponentId(self.registrar.get_registration::<A>())
-    }
-
-    pub fn get_component_id<A: 'static>(&self) -> Option<ComponentId> {
-        self.registrar.get_maybe::<A>().map(ComponentId)
-    }
-
-    // Panics if the type wasn't registered (e.g by adding it beforehand)
-    pub fn get_component_id_assertive<A: 'static>(&self) -> ComponentId {
-        ComponentId(self.registrar.get::<A>())
-    }
-
-    pub fn entity_has_component<A: 'static>(&self, entity: Entity) -> bool {
-        self.get_component_id::<A>().is_some_and(|id| {
-            self.entity_info(entity)
-                .is_some_and(|e| e.components.contains(&id))
-        })
-    }
-
+    /// Gets the [`EntityInfo`] associated to an entity
     pub fn get_entity_info(&self, e: Entity) -> Option<&EntityInfo> {
         self.entity_info.get(&e)
     }
 
-    pub fn get_archetype_manager_mut(&mut self) -> &mut ArchetypeManager {
+    /// Gets the [`ComponentId`] for type A if it exists, or creates a new one
+    pub fn get_or_create_component_id<A: 'static>(&mut self) -> ComponentId {
+        ComponentId(self.registrar.get_registration::<A>())
+    }
+
+    /// Gets the [`ComponentId`] for type A if it exists
+    pub fn get_component_id<A: 'static>(&self) -> Option<ComponentId> {
+        self.registrar.get_maybe::<A>().map(ComponentId)
+    }
+
+    /// Gets the [`ComponentId] for A, panicking if it doesn't exists
+    pub fn get_component_id_assertive<A: 'static>(&self) -> ComponentId {
+        ComponentId(self.registrar.get::<A>())
+    }
+
+    /// Returns `true` if the [`Entity`] has a component of type `A`
+    pub fn entity_has_component<A: 'static>(&self, entity: Entity) -> bool {
+        self.get_component_id::<A>().is_some_and(|id| {
+            self.get_entity_info(entity)
+                .is_some_and(|e| e.components.contains(&id))
+        })
+    }
+
+    pub(crate) fn get_archetype_manager_mut(&mut self) -> &mut ArchetypeManager {
         &mut self.archetype_manager
     }
 
-    pub fn get_archetype_manager(&self) -> &ArchetypeManager {
+    pub(crate) fn get_archetype_manager(&self) -> &ArchetypeManager {
         &self.archetype_manager
     }
 }
 
+/// An unsafe pointer to a [`WorldContainer`]
 pub struct UnsafeWorldPtr<'a>(UnsafeMutPtr<'a, WorldContainer>);
 impl<'a> Clone for UnsafeWorldPtr<'a> {
     fn clone(&self) -> Self {

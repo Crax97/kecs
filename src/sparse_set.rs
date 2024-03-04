@@ -3,7 +3,9 @@ struct SparseKey<T> {
     value: T,
 }
 
+/// Trait identifying all the objects that can be used as [`SparseSet] indexes
 pub trait SparseIndex: Default + From<usize> + Copy {
+    /// Returns the key's unique index
     fn index(&self) -> usize;
 }
 
@@ -13,6 +15,8 @@ impl<I: Default + Copy + Clone + Into<usize> + From<usize>> SparseIndex for I {
     }
 }
 
+/// A SparseSet is a data structure that can add, remove, index in constant time and iterate in linear time
+/// <https://skypjack.github.io/2019-03-07-ecs-baf-part-2/>
 pub struct SparseSet<I, T> {
     dense: Vec<SparseKey<T>>,
     sparse: Vec<I>,
@@ -46,15 +50,23 @@ impl<T, I: SparseIndex> Default for SparseSet<I, T> {
 }
 
 impl<I: SparseIndex, T> SparseSet<I, T> {
+    /// Creates a new, empty, sparse set
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// The number of items in this sparse set
     pub fn len(&self) -> usize {
         self.dense.len()
     }
 
-    // returns true if index was not present in the set, false otherwise
+    /// Returns true if the sparse set has no items
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Adds a new item to the sparse set
+    /// Returns true if index was not present in the set, false otherwise
     pub fn insert(&mut self, index: I, value: T) -> bool {
         let index = index.index();
         if let Some(key) = self.get_key(index) {
@@ -70,20 +82,26 @@ impl<I: SparseIndex, T> SparseSet<I, T> {
             true
         }
     }
+
+    /// Returns true if the sparse set contains the given `index`
     pub fn contains(&self, index: &I) -> bool {
         self.get(index).is_some()
     }
 
+    /// Gets a reference to the item associated with the given `index` if it exists
     pub fn get(&self, index: &I) -> Option<&T> {
         let index = index.index();
         self.get_key(index).map(|s| &self.dense[s].value)
     }
 
+    /// Gets a mutable reference to the item associated with the given `index` if it exists
     pub fn get_mut(&mut self, index: I) -> Option<&mut T> {
         let index = index.index();
         self.get_key(index).map(|s| &mut self.dense[s].value)
     }
 
+    /// Tries to remove an item from the sparse set
+    /// Returns `true` if the item with index `index` was present
     pub fn remove(&mut self, index: I) -> bool {
         if self.get(&index).is_some() {
             let index = index.index();
@@ -99,17 +117,21 @@ impl<I: SparseIndex, T> SparseSet<I, T> {
         false
     }
 
+    /// Iterates all the item in the sparse set, along with their values
     pub fn iter(&self) -> impl Iterator<Item = (I, &T)> {
         self.dense.iter().map(|d| (I::from(d.index), &d.value))
     }
 
+    /// Iterates mutably all the item in the sparse set, along with their values
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.dense.iter_mut().map(|d| &mut d.value)
     }
 
+    /// Removes all items from the sparse set
     pub fn clear(&mut self) {
         self.dense.clear();
     }
+
     fn get_key(&self, index: usize) -> Option<usize> {
         if index >= self.sparse.len() {
             return None;
@@ -131,6 +153,7 @@ impl<I: SparseIndex, T> SparseSet<I, T> {
         }
     }
 
+    /// Gets a mutable reference to the value at the specified `index` if it exists, or inserts it using the passed callback
     pub fn get_or_insert(&mut self, index: I, fun: impl FnOnce() -> T) -> &mut T {
         if !self.contains(&index) {
             self.insert(index, fun());
@@ -206,6 +229,6 @@ mod tests {
 
         sparse_set.clear();
 
-        assert!(sparse_set.len() == 0);
+        assert!(sparse_set.is_empty());
     }
 }

@@ -6,7 +6,7 @@ use std::vec;
 
 use petgraph::dot::Dot;
 use petgraph::graph::NodeIndex;
-use petgraph::visit::{EdgeRef, NodeRef};
+use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Graph};
 
 use crate::query::AccessMode;
@@ -20,17 +20,24 @@ use crate::{ComponentId, Entity, WorldContainer};
 ///      for each component/resource (even across threads), and if there's any non mutable access
 ///      then no mutable access must be performed on the resource
 pub unsafe trait Scheduler: Default {
+    /// This type identifies a system added to the Scheduler
     type SystemId: Sized + Eq + PartialEq + Ord + PartialOrd + Hash + Copy + Clone + Debug;
 
+    /// Implement this function to add a new instance of the Scheduler
     fn new() -> Self;
+
+    /// Implement this function to add a new system to the Scheduler
     fn add_system<ARGS, S: IntoSystem<ARGS>>(
         &mut self,
         world: &mut WorldContainer,
         system: S,
     ) -> Self::SystemId;
 
+    /// Implement this function to run the scheduler systems
     fn execute(&mut self, world: &mut WorldContainer);
 
+    /// This method will be called when a new entity changes somehow (e.g an entity is created,
+    /// a component is added/removed etc...)
     fn on_entity_updated(&mut self, world: &mut WorldContainer, entity: Entity);
 }
 
@@ -39,6 +46,9 @@ pub unsafe trait Scheduler: Default {
 pub struct LinearScheduler {
     systems: Vec<Box<dyn System>>,
 }
+
+/// The [`GraphScheduler`] will put the systems into a graph where the nodes are the systems and
+/// the edges are the dependencies between each system: this allows the systems to be run in parallel when possible
 pub struct GraphScheduler {
     current_dependencies: SparseSet<ComponentId, GraphResourceOwnership>,
     graph: Graph<SystemGraphNode, SystemGraphEdge, Directed>,
@@ -359,6 +369,8 @@ struct Schedules {
 }
 
 impl GraphScheduler {
+    /// This method prints the current job graph to stdout in Dot format, which can be viewed e.g
+    /// using [https://viz-js.com/](https://viz-js.com/)
     pub fn print_jobs(&self) {
         let dot = Dot::new(&self.graph);
         println!("{}", dot);

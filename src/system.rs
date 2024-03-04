@@ -7,35 +7,62 @@ use crate::{
 };
 use std::{borrow::Cow, marker::PhantomData};
 
+/// The trait used to identify all the types that can be used as system parameters
+/// (e.g [`Query`], [`Res`]/[`ResMut`]).
 pub trait SystemParam: Sized {
+    /// The state used by this parameter
     type State: Send + Sync + 'static;
+
+    /// `true` if the parameter is `&mut WorldContainer`
     const IS_WORLD: bool;
 
+    /// This method is used to add this parameter's dependencies to the `components` [`SparseSet`]
     fn add_dependencies(
         store: &mut WorldContainer,
         components: &mut SparseSet<ComponentId, AccessMode>,
     );
+
+    /// This method is used to create the parameter
     fn create<'world, 'state>(data: &'state Self::State, store: &'world mut WorldContainer) -> Self
     where
         'world: 'state;
+
+    /// This method is used to create the parameter's [`Self::State`]
     fn create_initial_state(store: &mut WorldContainer) -> Self::State;
+
+    /// This method is called when the state of an [`Entity`] changes (e.g a new [`Entity`] is created/a new component is added etc...)
     fn on_entity_changed(
         state: &mut Self::State,
         store: &WorldContainer,
         entity: Entity,
         info: &EntityInfo,
     );
+
+    /// This method should return true if the parameter exclusively accesses a parameter
     fn is_exclusive(world: &WorldContainer) -> bool;
 }
+
+/// The trait implemented by all systems, which can be added into a [`crate::Scheduler`].
 pub trait System: Send + Sync + 'static {
+    /// Gets the system's name
     fn get_name(&self) -> Cow<'static, str>;
+
+    /// Called when the system is added into a [`crate::Scheduler`]
     fn init(&mut self, store: &mut WorldContainer);
+
+    /// Called to execute the system
     fn run(&mut self, store: &mut WorldContainer);
+
+    /// Called to get the system's dependencies
     fn compute_dependencies(
         &self,
         world: &mut WorldContainer,
     ) -> SparseSet<ComponentId, AccessMode>;
+
+    /// Called when the state of an entity changes
     fn on_entity_changed(&mut self, store: &WorldContainer, entity: Entity, info: &EntityInfo);
+
+    /// Must return true if the system should be scheduled on the main thread
     fn is_exclusive(&self, world: &WorldContainer) -> bool;
 }
 
@@ -137,6 +164,7 @@ impl SystemParam for &mut WorldContainer {
     }
 }
 
+/// Wrapper type for a `fn` system
 pub struct SystemContainer<F, A> {
     _args: PhantomData<A>,
     fun: F,
@@ -145,7 +173,7 @@ pub struct SystemContainer<F, A> {
 }
 
 impl<F, A> SystemContainer<F, A> {
-    pub fn new(fun: F, name: Cow<'static, str>) -> Self {
+    pub(crate) fn new(fun: F, name: Cow<'static, str>) -> Self {
         Self {
             _args: PhantomData,
             fun,
