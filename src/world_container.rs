@@ -7,7 +7,6 @@ use crate::{
     sparse_set::SparseSet,
     storage::{StorageType, TableStorage},
     type_registrar::{TypeRegistrar, UniqueTypeId},
-    World,
 };
 
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Default, Clone, Copy)]
@@ -40,12 +39,26 @@ impl From<Entity> for usize {
     }
 }
 
+/// Holds all the informations about an entity, such as its ArchetypeId and the entity's components
 #[derive(Default, Clone, Debug)]
 pub struct EntityInfo {
     pub components: SparseSet<ComponentId, ()>,
     pub archetype_id: ArchetypeId,
 }
 
+/// A [`WorldContainer`] holds all the state for the [`Entity`] in the [`crate::KecsWorld`], their components
+/// and the World's [`Resource`]s.
+/// The [`WorldContainer`] can be either modified from the [`crate::KecsWorld`], or can be modified by a system using
+/// using a parameter of type `&mut `[`WorldContainer`]: such systems can only have the [`WorldContainer`] as their parameter,
+/// and are called *exclusive systems*, and will be scheduled to be run on the main thread
+///
+/// e.g
+///```
+/// use kecs::WorldContainer;
+/// fn do_something(world: &mut WorldContainer) {
+///    // Do something with the world
+/// }
+///```
 pub struct WorldContainer {
     storage: TableStorage,
     next_entity_id: u32,
@@ -62,12 +75,51 @@ pub struct WorldContainer {
 
 // Functions exposed to systems
 impl WorldContainer {
+    /// Gets a reference to a component for an [`Entity`], returns None if the component id does not exists
+    /// or if the entity does not have the component
+    pub fn get_component<T: 'static>(&self, entity: Entity) -> Option<&T> {
+        let id = self.get_component_id::<T>()?;
+        let has_component = self
+            .entity_info(entity)
+            .is_some_and(|info| info.components.contains(&id));
+        if has_component {
+            unsafe {
+                // SAFETY: We chechked that the entity has the component, and that the component ID exists
+                let ptr = self.storage.get_component(entity, id);
+                Some(ptr.into_ref())
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Gets a mutable reference to a component for an [`Entity`], returns None if the component id does not exists
+    /// or if the entity does not have the component
+    pub fn get_component_mut<T: 'static>(&mut self, entity: Entity) -> Option<&mut T> {
+        let id = self.get_component_id::<T>()?;
+        let has_component = self
+            .entity_info(entity)
+            .is_some_and(|info| info.components.contains(&id));
+        if has_component {
+            unsafe {
+                // SAFETY: We chechked that the entity has the component, and that the component ID exists
+                let ptr = self.storage.get_component_mut(entity, id);
+                Some(ptr.into_mut())
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Creates a new `Send` resource: a resource can be accessed by a system either through
+    /// [`crate::Res`] or [`crate::ResMut`], access to the resource will be done in parallel when possible
     pub fn add_resource<R: 'static + Send + Sync + Resource>(&mut self, resource: R) {
         let id = self.get_or_create_component_id::<R>();
         self.resource_sendness.insert(id, true);
         self.send_resources.add(id, resource);
     }
 
+    /// Creates a new `!Send` resource: accessing this resource can only be done on the main thread
     pub fn add_non_send_resource<R: 'static + Resource>(&mut self, resource: R) {
         let id = self.get_or_create_component_id::<R>();
         self.resource_sendness.insert(id, false);
@@ -238,7 +290,7 @@ impl WorldContainer {
         new_archetype.entities.insert(entity, ());
     }
 
-    pub(crate) unsafe fn get_component<C: 'static>(
+    pub(crate) unsafe fn get_component_unsafe<C: 'static>(
         &self,
         entity: Entity,
         component_id: ComponentId,
@@ -248,7 +300,7 @@ impl WorldContainer {
         //# SAFETY: We asserted that the entity has the component
         unsafe { self.storage.get_component(entity, component_id) }
     }
-    pub(crate) unsafe fn get_component_mut<C: 'static>(
+    pub(crate) unsafe fn get_component_mut_unsafe<C: 'static>(
         &self,
         entity: Entity,
         component_id: ComponentId,
@@ -301,7 +353,7 @@ impl<'a> UnsafeWorldPtr<'a> {
     pub(crate) unsafe fn get_component<A: 'static>(&self, entity: Entity) -> UnsafePtr<'a, A> {
         let store = unsafe { self.0 .0.as_mut().unwrap() };
         let component_id = store.get_component_id_assertive::<A>();
-        store.get_component(entity, component_id)
+        store.get_component_unsafe(entity, component_id)
     }
 
     pub(crate) unsafe fn get_component_mut<A: 'static>(
@@ -310,7 +362,7 @@ impl<'a> UnsafeWorldPtr<'a> {
     ) -> UnsafeMutPtr<'a, A> {
         let store = unsafe { self.0 .0.as_mut().unwrap() };
         let component_id = store.get_component_id_assertive::<A>();
-        store.get_component_mut(entity, component_id)
+        store.get_component_mut_unsafe(entity, component_id)
     }
 }
 

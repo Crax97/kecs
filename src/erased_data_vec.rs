@@ -234,6 +234,10 @@ impl<'a, T> UnsafePtr<'a, T> {
     pub unsafe fn get(&self) -> &T {
         self.0.as_ref().unwrap()
     }
+
+    pub unsafe fn into_ref(self) -> &'a T {
+        self.0.as_ref().unwrap()
+    }
 }
 
 impl<'a, T> UnsafeMutPtr<'a, T> {
@@ -242,6 +246,14 @@ impl<'a, T> UnsafeMutPtr<'a, T> {
     }
     pub unsafe fn get_mut(&mut self) -> &mut T {
         unsafe { self.0.as_mut().unwrap() }
+    }
+
+    pub unsafe fn into_ref(self) -> &'a T {
+        self.0.as_ref().unwrap()
+    }
+
+    pub unsafe fn into_mut(self) -> &'a mut T {
+        self.0.as_mut().unwrap()
     }
 }
 

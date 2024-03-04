@@ -17,9 +17,45 @@ pub trait QueryParam {
         component_set: &mut SparseSet<ComponentId, AccessMode>,
     );
     fn can_extract(store: &WorldContainer, entity: Entity) -> bool;
+    /// # Safety
+    /// The parameter must only be extracted for the entity specified, without breaking Rust's alising rules
     unsafe fn extract(store: &UnsafeWorldPtr, entity: Entity) -> Self;
 }
 
+/// A Query is used by a system to iterate all the components matching the query's parameters
+/// e.g
+/// ```
+/// use kecs::{World, Query};
+/// struct TestComponentA(u32);
+/// struct TestComponentB(f32);
+/// let mut world = World::new();
+/// {
+///    let entity = world.new_entity();
+///     world.add_component(entity, TestComponentA(1));
+/// }
+/// {
+///    let entity = world.new_entity();
+///     world.add_component(entity, TestComponentA(2));
+///     world.add_component(entity, TestComponentB(3.14));
+/// }
+/// // This query will iterate all components that have a `TestComponentA`, aka both components in the world
+/// fn query_a(query: Query<&mut TestComponentA>) {
+///    for item in query.iter() {
+///        item.0 = 10;
+///    }
+/// }
+/// // This query will iterate only the entities with `TestComponentA` and `TestComponentB`
+/// // aka both components in the world
+/// fn query_b(query: Query<(&TestComponentA, &TestComponentB)>) {
+///    for (a, b) in query.iter() {
+///         assert!(a.0 == 10);
+///         println!("B's value is {}", b.0);
+///    }
+/// }
+/// world.add_system(query_a);
+/// world.add_system(query_b);
+/// world.update();
+/// ```
 pub struct Query<'world, 'state, A: QueryParam> {
     _ph: PhantomData<A>,
     state: &'state QueryState,

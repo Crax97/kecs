@@ -29,6 +29,14 @@ impl<S: Scheduler> KecsWorld<S> {
         self.update_systems(entity);
     }
 
+    pub fn get_component<T: 'static>(&self, entity: Entity) -> Option<&T> {
+        self.container.get_component::<T>(entity)
+    }
+
+    pub fn get_component_mut<T: 'static>(&mut self, entity: Entity) -> Option<&mut T> {
+        self.container.get_component_mut::<T>(entity)
+    }
+
     pub fn add_resource<T: 'static + Resource + Send + Sync>(&mut self, resource: T) {
         self.container.add_resource::<T>(resource);
     }

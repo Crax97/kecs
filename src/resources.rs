@@ -20,6 +20,7 @@ pub struct ResourceData<const SEND: bool> {
     original_creator: Option<ThreadId>,
 }
 
+/// Provides non-mutable access to a resource stored in the [`crate::WorldContainer`]
 pub struct Res<'world, 'res, T: 'static>
 where
     'world: 'res,
@@ -29,6 +30,8 @@ where
     ptr: UnsafePtr<'res, T>,
 }
 
+/// Provides mutable access to a resource stored in the [`crate::WorldContainer`]
+/// If the resource is `![Send]`, the access will be scheduled on the main thread
 pub struct ResMut<'world, 'res, T: 'static>
 where
     'world: 'res,
