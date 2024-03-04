@@ -2,10 +2,11 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::vec;
 
 use petgraph::dot::Dot;
 use petgraph::graph::NodeIndex;
-use petgraph::visit::EdgeRef;
+use petgraph::visit::{EdgeRef, NodeRef};
 use petgraph::{Directed, Graph};
 
 use crate::query::AccessMode;
@@ -113,73 +114,16 @@ unsafe impl Scheduler for GraphScheduler {
         let system_node_idx = self.graph.add_node(system_node);
 
         if system_is_exclusive {
-            let leaves: HashSet<NodeIndex> = self
-                .graph
-                .node_indices()
-                .filter(|&node| {
-                    node != system_node_idx
-                        && self
-                            .graph
-                            .edges_directed(node, petgraph::Direction::Outgoing)
-                            .next()
-                            .is_none()
-                })
-                .collect();
-            for leaf in leaves {
-                self.graph
-                    .add_edge(leaf, system_node_idx, SystemGraphEdge { changes: vec![] });
-            }
+            // If a system is exclusive, place a dependency on all the leaf nodes
+            self.place_system_dependency_on_leaves(system_node_idx);
         } else {
-            let mut node_dependencies = HashMap::<NodeIndex, SystemGraphEdge>::new();
-            for (component, ownership) in self.current_dependencies.iter() {
-                if let Some(sys_access) = system_dependencies.get(&component) {
-                    if *sys_access != ownership.access_mode
-                        || (*sys_access == AccessMode::Write
-                            && ownership.access_mode == AccessMode::Write)
-                    {
-                        // Dependency: the access mode changes or the previous system writes to the same components
-                        // of the new system
-                        node_dependencies
-                            .entry(ownership.system_node)
-                            .or_default()
-                            .changes
-                            .push(SystemGraphChange {
-                                component,
-                                new_access_mode: *sys_access,
-                            });
-                    }
-                }
-            }
+            let node_dependencies = self.compute_node_dependencies(&system_dependencies);
 
             if node_dependencies.is_empty() {
-                for (component, access) in system_dependencies.iter() {
-                    self.current_dependencies.insert(
-                        component,
-                        GraphResourceOwnership {
-                            access_mode: *access,
-                            system_node: system_node_idx,
-                        },
-                    );
-                }
-                self.graph.add_edge(
-                    self.root_node_idx,
-                    system_node_idx,
-                    SystemGraphEdge::default(),
-                );
+                // System writes to a set of components never encountered before, place it at the beginning
+                self.place_system_at_graph_begin(system_dependencies, system_node_idx);
             } else {
-                for (owner, changes) in node_dependencies {
-                    // We're only interested in recording who writes the resources
-                    for change in changes
-                        .changes
-                        .iter()
-                        .filter(|c| c.new_access_mode == AccessMode::Write)
-                    {
-                        let dep = self.current_dependencies.get_mut(change.component).unwrap();
-                        dep.access_mode = change.new_access_mode;
-                        dep.system_node = system_node_idx;
-                    }
-                    self.graph.add_edge(owner, system_node_idx, changes);
-                }
+                self.place_system_dependencies(node_dependencies, system_node_idx);
             }
         }
 
@@ -244,14 +188,144 @@ impl GraphScheduler {
 
         Schedules { groups: schedules }
     }
+
+    fn place_system_dependency_on_leaves(&mut self, system_node_idx: NodeIndex) {
+        let leaves: HashSet<NodeIndex> = self
+            .graph
+            .node_indices()
+            .filter(|&node| {
+                node != system_node_idx
+                    && self
+                        .graph
+                        .edges_directed(node, petgraph::Direction::Outgoing)
+                        .next()
+                        .is_none()
+            })
+            .collect();
+        for leaf in leaves {
+            self.graph
+                .add_edge(leaf, system_node_idx, SystemGraphEdge { changes: vec![] });
+        }
+    }
+
+    fn compute_node_dependencies(
+        &mut self,
+        system_dependencies: &SparseSet<ComponentId, AccessMode>,
+    ) -> HashMap<NodeIndex, SystemGraphEdge> {
+        let mut node_dependencies = HashMap::<NodeIndex, SystemGraphEdge>::new();
+        for (component, &access) in system_dependencies.iter() {
+            let ownership = self.current_dependencies.get_mut(component);
+            if let Some(ownership) = ownership {
+                match access {
+                    // If a system writes to a resource, it depends on the previous ones that read it.
+                    // If no one read it, it depends on the last writing one
+                    AccessMode::Write => {
+                        // No previous reader, depend on the latest writing
+                        if ownership.last_accessing.is_empty() {
+                            if let Some(writer) = ownership.last_writing {
+                                node_dependencies.insert(
+                                    writer,
+                                    SystemGraphEdge {
+                                        changes: vec![SystemGraphChange {
+                                            component,
+                                            new_access_mode: access,
+                                        }],
+                                    },
+                                );
+                            }
+                        } else {
+                            // Depend on the latest readers
+                            for reading in &ownership.last_accessing {
+                                node_dependencies.insert(
+                                    *reading,
+                                    SystemGraphEdge {
+                                        changes: vec![SystemGraphChange {
+                                            component,
+                                            new_access_mode: access,
+                                        }],
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    // If a system reads a resource, it depends on the latest one writing it
+                    AccessMode::Read => {
+                        if let Some(writer) = ownership.last_writing {
+                            node_dependencies.insert(
+                                writer,
+                                SystemGraphEdge {
+                                    changes: vec![SystemGraphChange {
+                                        component,
+                                        new_access_mode: access,
+                                    }],
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        node_dependencies
+    }
+
+    fn place_system_at_graph_begin(
+        &mut self,
+        system_dependencies: SparseSet<ComponentId, AccessMode>,
+        system_node_idx: NodeIndex,
+    ) {
+        for (component, access) in system_dependencies.iter() {
+            self.current_dependencies.insert(
+                component,
+                GraphResourceOwnership {
+                    access_mode: *access,
+                    last_accessing: if *access == AccessMode::Read {
+                        HashSet::from_iter([system_node_idx])
+                    } else {
+                        HashSet::default()
+                    },
+                    last_writing: if *access == AccessMode::Write {
+                        Some(system_node_idx)
+                    } else {
+                        None
+                    },
+                },
+            );
+        }
+        self.graph.add_edge(
+            self.root_node_idx,
+            system_node_idx,
+            SystemGraphEdge::default(),
+        );
+    }
+
+    fn place_system_dependencies(
+        &mut self,
+        node_dependencies: HashMap<NodeIndex, SystemGraphEdge>,
+        system_node_idx: NodeIndex,
+    ) {
+        for (owner, changes) in node_dependencies {
+            for change in &changes.changes {
+                let dep = self.current_dependencies.get_mut(change.component).unwrap();
+                dep.access_mode = change.new_access_mode;
+
+                if change.new_access_mode == AccessMode::Read {
+                    dep.last_accessing.insert(system_node_idx);
+                } else {
+                    dep.last_accessing.clear();
+                    dep.last_writing = Some(system_node_idx);
+                }
+            }
+            self.graph.add_edge(owner, system_node_idx, changes);
+        }
+    }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Schedule {
     jobs: Vec<NodeIndex>,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Schedules {
     groups: Vec<Schedule>,
 }
@@ -297,7 +371,12 @@ pub struct SystemGraphEdge {
 #[derive(Debug)]
 pub struct GraphResourceOwnership {
     access_mode: AccessMode,
-    system_node: NodeIndex,
+
+    // If a system reads a component, it depends on the last one writing it
+    last_writing: Option<NodeIndex>,
+
+    // If a system needs to write a component, it depends on the last ones accessing the component
+    last_accessing: HashSet<NodeIndex>,
 }
 
 impl std::fmt::Display for SystemGraphNode {
@@ -321,7 +400,6 @@ impl std::fmt::Display for SystemGraphEdge {
 
 #[cfg(test)]
 mod tests {
-
     use crate::{
         query::Query,
         resources::{ResMut, Resource},
@@ -566,5 +644,33 @@ mod tests {
         assert!(schedule.groups[0].jobs.contains(&update));
         assert!(schedule.groups[1].jobs.contains(&print_1));
         assert!(schedule.groups[1].jobs.contains(&print_2));
+    }
+
+    #[test]
+    fn write_read_write() {
+        struct TestComponentA;
+
+        fn sys_write_a(_: Query<&mut TestComponentA>) {}
+        fn sys_read_a(_: Query<&TestComponentA>) {}
+
+        let mut world = World::new();
+        let mut scheduler = GraphScheduler::new();
+
+        let sys_1 = scheduler.add_system(&mut world, sys_write_a);
+        let sys_2 = scheduler.add_system(&mut world, sys_read_a);
+        let sys_3 = scheduler.add_system(&mut world, sys_read_a);
+        let sys_4 = scheduler.add_system(&mut world, sys_write_a);
+        let sys_5 = scheduler.add_system(&mut world, sys_write_a);
+
+        let schedule = scheduler.compute_schedule();
+
+        scheduler.print_jobs();
+
+        assert!(schedule.groups.len() == 4);
+        assert!(schedule.groups[0].jobs.len() == 1 && schedule.groups[0].jobs.contains(&sys_1));
+        assert!(schedule.groups[1].jobs.len() == 2 && schedule.groups[1].jobs.contains(&sys_2));
+        assert!(schedule.groups[1].jobs.len() == 2 && schedule.groups[1].jobs.contains(&sys_3));
+        assert!(schedule.groups[2].jobs.len() == 1 && schedule.groups[2].jobs.contains(&sys_4));
+        assert!(schedule.groups[3].jobs.len() == 1 && schedule.groups[3].jobs.contains(&sys_5));
     }
 }
