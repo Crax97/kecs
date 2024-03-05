@@ -49,6 +49,7 @@
 //! world.update();
 //! ```
 mod archetype;
+mod entity_manager;
 mod erased_data_vec;
 mod query;
 mod resources;
@@ -59,9 +60,12 @@ mod type_registrar;
 mod world;
 mod world_container;
 
+mod commands;
 mod sparse_set;
 
 pub use archetype::*;
+pub use commands::{Commands, EntityBuilder};
+pub use entity_manager::{Entity, EntityInfo};
 pub use query::*;
 pub use resources::{Res, ResMut, Resource};
 pub use schedule::{GraphScheduler, LinearScheduler, Scheduler};
@@ -72,6 +76,39 @@ pub use world_container::*;
 
 /// The suggested [`KecsWorld`] to use: the [`GraphScheduler`] will run systems in parallel when possible
 pub type World = KecsWorld<GraphScheduler>;
+
+impl<'cworld> SystemParam for Commands<'cworld> {
+    type State = ();
+
+    const IS_WORLD: bool = false;
+
+    fn add_dependencies(
+        _store: &mut WorldContainer,
+        _components: &mut SparseSet<ComponentId, AccessMode>,
+    ) {
+    }
+
+    fn create<'world, 'state>(_data: &'state Self::State, store: &'world mut WorldContainer) -> Self
+    where
+        'world: 'state,
+    {
+        unsafe { std::mem::transmute(store.commands()) }
+    }
+
+    fn create_initial_state(_store: &mut WorldContainer) -> Self::State {}
+
+    fn on_entity_changed(
+        _state: &mut Self::State,
+        _store: &WorldContainer,
+        _entity: Entity,
+        _info: &EntityInfo,
+    ) {
+    }
+
+    fn is_exclusive(_world: &WorldContainer) -> bool {
+        false
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -1,12 +1,15 @@
-use std::marker::PhantomData;
+use std::{any::TypeId, marker::PhantomData};
 
 use crate::{
-    archetype::{ArchetypeId, ArchetypeManager},
-    erased_data_vec::{UnsafeMutPtr, UnsafePtr},
+    archetype::ArchetypeManager,
+    commands::{Commands, CommandsSender, TypedBlob},
+    entity_manager::EntityAllocator,
+    erased_data_vec::{ErasedVec, UnsafeMutPtr, UnsafePtr},
     resources::{Resource, Resources},
     sparse_set::SparseSet,
     storage::{StorageType, TableStorage},
     type_registrar::{TypeRegistrar, UniqueTypeId},
+    Entity, EntityInfo,
 };
 
 /// The unique id of any component
@@ -24,13 +27,6 @@ impl From<ComponentId> for usize {
         value.0 .0
     }
 }
-
-/// [`Entity`]s are the first building blocks of an ECS: they are used to associate one or more components together,
-/// on which [`crate::System`]s operate: they are implemented as an integer, which uniquely identifies the components
-/// associated to the Entity
-#[derive(Default, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Clone, Copy)]
-pub struct Entity(pub(crate) u32);
-
 impl From<usize> for Entity {
     fn from(value: usize) -> Self {
         Entity(value as u32)
@@ -41,16 +37,6 @@ impl From<Entity> for usize {
     fn from(value: Entity) -> Self {
         value.0 as usize
     }
-}
-
-/// Holds all the informations about an entity, such as its ArchetypeId and the entity's components
-#[derive(Default, Clone, Debug)]
-pub struct EntityInfo {
-    /// The set of all the components belonging to this [`Entity`]
-    pub components: SparseSet<ComponentId, ()>,
-
-    /// The [`ArchetypeId`] of this [`Entity`]
-    pub archetype_id: ArchetypeId,
 }
 
 /// A [`WorldContainer`] holds all the state for the [`Entity`] in the [`crate::KecsWorld`], their components
@@ -68,12 +54,11 @@ pub struct EntityInfo {
 ///```
 pub struct WorldContainer {
     storage: TableStorage,
-    next_entity_id: u32,
-    entity_info: SparseSet<Entity, EntityInfo>,
-    dropped_entities: Vec<Entity>,
     registrar: TypeRegistrar,
-    archetype_manager: ArchetypeManager,
 
+    pub(crate) entity_manager: EntityAllocator,
+    pub(crate) archetype_manager: ArchetypeManager,
+    pub(crate) commands: CommandsSender,
     pub(crate) send_resources: Resources<true>,
     pub(crate) non_send_resources: Resources<false>,
     // This SparseSet contains true if the resource is Send, false otherwise
@@ -82,6 +67,11 @@ pub struct WorldContainer {
 
 // Functions exposed to systems
 impl WorldContainer {
+    /// Creates a [`Commands`] instance that can be used to send deferred commands
+    pub fn commands(&self) -> Commands {
+        Commands::new(self)
+    }
+
     /// Gets a reference to a component for an [`Entity`], returns None if the component id does not exists
     /// or if the entity does not have the component
     pub fn get_component<T: 'static>(&self, entity: Entity) -> Option<&T> {
@@ -165,12 +155,12 @@ impl WorldContainer {
 
     /// Iterates all the [`Entity`]s, along with their [`EntityInfo`]s
     pub fn iter_all_entities(&self) -> impl Iterator<Item = (Entity, &EntityInfo)> + '_ {
-        self.entity_info.iter()
+        self.entity_manager.iter_all_entities()
     }
 
     /// Gets the [`EntityInfo`] associated to an entity
     pub fn get_entity_info(&self, e: Entity) -> Option<&EntityInfo> {
-        self.entity_info.get(&e)
+        self.entity_manager.entity_info(e)
     }
 
     /// Gets the [`ComponentId`] for type A if it exists, or creates a new one
@@ -203,6 +193,61 @@ impl WorldContainer {
     pub(crate) fn get_archetype_manager(&self) -> &ArchetypeManager {
         &self.archetype_manager
     }
+
+    pub(crate) unsafe fn add_component_from_type_id(
+        &mut self,
+        entity: Entity,
+        component: TypedBlob,
+    ) {
+        let component_id = self.get_or_create_component_id_dynamic(component.blob_ty_id);
+        self.add_component_dynamic(entity, component_id, &component.data);
+    }
+
+    fn get_or_create_component_id_dynamic(&mut self, blob_ty_id: TypeId) -> ComponentId {
+        let id = self.registrar.get_from_type_id(blob_ty_id);
+        ComponentId(id)
+    }
+
+    fn add_component_dynamic(
+        &mut self,
+        entity: Entity,
+        component_id: ComponentId,
+        data: &ErasedVec,
+    ) {
+        let entity_info = self
+            .entity_manager
+            .entity_info_mut(entity)
+            .expect("Failed to get entity");
+        if entity_info.components.contains(&component_id) {
+            //# SAFETY: The entity contains the specified component
+            unsafe {
+                self.storage
+                    .replace_entity_component_dynamic(entity, component_id, data);
+            };
+            return;
+        }
+
+        entity_info.components.insert(component_id, ());
+
+        //# SAFETY: The entity does not have the specified component
+        unsafe {
+            self.storage
+                .add_entity_component_dynamic(entity, component_id, data)
+        }
+
+        self.update_entity_archetype(entity);
+    }
+
+    pub(crate) fn remove_component_from_type_id(&mut self, entity: Entity, component_ty: TypeId) {
+        let component_id = self.get_or_create_component_id_dynamic(component_ty);
+        Self::remove_component_untyped(
+            entity,
+            self.entity_manager.entity_info_mut(entity).unwrap(),
+            component_id,
+            &mut self.storage,
+        );
+        self.update_entity_archetype(entity);
+    }
 }
 
 /// An unsafe pointer to a [`WorldContainer`]
@@ -214,17 +259,16 @@ impl<'a> Clone for UnsafeWorldPtr<'a> {
 }
 
 impl WorldContainer {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(commands: CommandsSender) -> Self {
         Self {
-            next_entity_id: 0,
             storage: TableStorage::new(),
-            dropped_entities: Default::default(),
-            entity_info: SparseSet::default(),
+            entity_manager: Default::default(),
             registrar: TypeRegistrar::default(),
             archetype_manager: ArchetypeManager::default(),
             send_resources: Resources::new(),
             non_send_resources: Resources::new(),
             resource_sendness: Default::default(),
+            commands,
         }
     }
 
@@ -233,10 +277,7 @@ impl WorldContainer {
     }
 
     pub(crate) fn new_entity(&mut self) -> Entity {
-        let id = self.next_entity_id;
-        let id = Entity(id);
-        self.next_entity_id += 1;
-        self.entity_info.insert(id, EntityInfo::default());
+        let id = self.entity_manager.new_entity();
         // SAFETY: The registered entity is a new entity
         unsafe {
             self.storage.register_new_entity(id);
@@ -244,8 +285,17 @@ impl WorldContainer {
         id
     }
 
+    /// # Safety
+    /// The caller must ensure that the entity id is new
+    pub(crate) unsafe fn new_entity_with_id(&mut self, id: Entity) {
+        self.entity_manager.new_with_id(id);
+
+        // SAFETY: The registered entity is a new entity
+        self.storage.register_new_entity(id);
+    }
+
     pub(crate) fn remove_entity(&mut self, entity: Entity) {
-        if let Some(info) = self.entity_info.get_mut(entity) {
+        if let Some(info) = self.entity_manager.entity_info_mut(entity) {
             let components = info.components.iter().map(|(c, _)| c).collect::<Vec<_>>();
             for component in components {
                 Self::remove_component_untyped(entity, info, component, &mut self.storage);
@@ -253,15 +303,17 @@ impl WorldContainer {
             // SAFETY: An entity is alive only when it has an associated EntityInfo
             unsafe {
                 self.storage.erase_entity(entity);
-                self.entity_info.remove(entity);
             }
-            self.dropped_entities.push(entity);
+            self.entity_manager.destroy_entity(entity);
         }
     }
 
     pub(crate) fn add_component<C: 'static>(&mut self, entity: Entity, component: C) {
         let component_id = ComponentId(self.registrar.get_registration::<C>());
-        let entity_info = self.entity_info.get_mut(entity).unwrap();
+        let entity_info = self
+            .entity_manager
+            .entity_info_mut(entity)
+            .expect("Failed to find entity");
         if entity_info.components.contains(&component_id) {
             //# SAFETY: The entity contains the specified component
             unsafe {
@@ -283,7 +335,10 @@ impl WorldContainer {
     }
 
     fn update_entity_archetype(&mut self, entity: Entity) {
-        let entity_info = self.entity_info.get_mut(entity).unwrap();
+        let entity_info = self
+            .entity_manager
+            .entity_info_mut(entity)
+            .expect("Failed to find entity");
         if let Some(old_archetype) = self
             .archetype_manager
             .get_archetype_mut(entity_info.archetype_id)
@@ -306,7 +361,7 @@ impl WorldContainer {
         entity: Entity,
         component_id: ComponentId,
     ) -> UnsafePtr<'_, C> {
-        let entity_info = &self.entity_info.get(&entity).unwrap().components;
+        let entity_info = &self.entity_manager.entity_info(entity).unwrap().components;
         assert!(entity_info.contains(&component_id));
         //# SAFETY: We asserted that the entity has the component
         unsafe { self.storage.get_component(entity, component_id) }
@@ -316,7 +371,7 @@ impl WorldContainer {
         entity: Entity,
         component_id: ComponentId,
     ) -> UnsafeMutPtr<'_, C> {
-        let entity_info = &self.entity_info.get(&entity).unwrap().components;
+        let entity_info = &self.entity_manager.entity_info(entity).unwrap().components;
         assert!(entity_info.contains(&component_id));
         //# SAFETY: We asserted that the entity has the component
         unsafe { self.storage.get_component_mut(entity, component_id) }
@@ -324,7 +379,7 @@ impl WorldContainer {
 
     pub(crate) fn remove_component<C: 'static>(&mut self, entity: Entity) {
         let component_id = ComponentId(self.registrar.get_registration::<C>());
-        if let Some(entity_info) = self.entity_info.get_mut(entity) {
+        if let Some(entity_info) = self.entity_manager.entity_info_mut(entity) {
             Self::remove_component_untyped(entity, entity_info, component_id, &mut self.storage);
             self.update_entity_archetype(entity);
         }
@@ -345,15 +400,9 @@ impl WorldContainer {
     }
 }
 
-impl Default for WorldContainer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Drop for WorldContainer {
     fn drop(&mut self) {
-        let entities = self.entity_info.iter().map(|(e, _)| e).collect::<Vec<_>>();
+        let entities = self.iter_all_entities().map(|(e, _)| e).collect::<Vec<_>>();
         for ent in entities {
             self.remove_entity(ent);
         }

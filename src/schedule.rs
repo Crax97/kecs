@@ -442,6 +442,7 @@ impl std::fmt::Display for SystemGraphEdge {
 #[cfg(test)]
 mod tests {
     use crate::{
+        commands::Commands,
         query::Query,
         resources::{ResMut, Resource},
         Entity, WorldContainer,
@@ -454,6 +455,10 @@ mod tests {
 
     #[derive(Default)]
     struct Component2;
+
+    fn make_world_container() -> WorldContainer {
+        WorldContainer::new(Commands::create().0)
+    }
 
     fn write_component_1(_: Query<&mut Component1>) {}
     fn write_component_2(_: Query<&mut Component2>) {}
@@ -473,7 +478,7 @@ mod tests {
 
     #[test]
     fn write_then_read() {
-        let mut world = WorldContainer::new();
+        let mut world = make_world_container();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, write_component_1);
@@ -487,7 +492,7 @@ mod tests {
 
     #[test]
     fn disjoint_systems() {
-        let mut world = WorldContainer::new();
+        let mut world = make_world_container();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, write_component_1);
@@ -503,7 +508,7 @@ mod tests {
 
     #[test]
     fn parallel_read() {
-        let mut world = WorldContainer::new();
+        let mut world = make_world_container();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, read_component_1);
@@ -517,7 +522,7 @@ mod tests {
 
     #[test]
     fn parallel_write() {
-        let mut world = WorldContainer::new();
+        let mut world = make_world_container();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, write_component_1);
@@ -531,7 +536,7 @@ mod tests {
 
     #[test]
     fn read_then_write() {
-        let mut world = WorldContainer::new();
+        let mut world = make_world_container();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, read_component_1);
@@ -545,7 +550,7 @@ mod tests {
 
     #[test]
     fn read_then_write_same_query() {
-        let mut world = WorldContainer::new();
+        let mut world = make_world_container();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, read_component_1);
@@ -567,7 +572,7 @@ mod tests {
 
     #[test]
     fn non_parallel_world() {
-        let mut world = WorldContainer::new();
+        let mut world = make_world_container();
         let mut scheduler = GraphScheduler::new();
 
         let system_0 = scheduler.add_system(&mut world, read_component_1);
@@ -604,7 +609,7 @@ mod tests {
         fn exclusive_sys(_: &mut WorldContainer) {}
         fn sys_d(_: Query<&WrittenByA>, _: ResMut<NonSendResource>) {}
 
-        let mut world = WorldContainer::new();
+        let mut world = make_world_container();
         let mut scheduler = GraphScheduler::new();
 
         // Register  first the resource
@@ -672,7 +677,7 @@ mod tests {
             }
         }
 
-        let mut world = WorldContainer::new();
+        let mut world = make_world_container();
         let mut scheduler = GraphScheduler::new();
         let update = scheduler.add_system(&mut world, update_bullet_position);
         let print_1 = scheduler.add_system(&mut world, print_player_position);
@@ -694,7 +699,7 @@ mod tests {
         fn sys_write_a(_: Query<&mut TestComponentA>) {}
         fn sys_read_a(_: Query<&TestComponentA>) {}
 
-        let mut world = WorldContainer::new();
+        let mut world = make_world_container();
         let mut scheduler = GraphScheduler::new();
 
         let sys_1 = scheduler.add_system(&mut world, sys_write_a);

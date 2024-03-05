@@ -10,10 +10,10 @@ pub struct UnsafePtr<'a, T: 'static>(pub(crate) *const T, pub(crate) PhantomData
 #[derive(Clone, Copy)]
 pub struct UnsafeMutPtr<'a, T: 'static>(pub(crate) *mut T, pub(crate) PhantomData<&'a T>);
 pub struct ErasedVec {
-    data: NonNull<u8>,
-    layout: Layout,
+    pub(crate) layout: Layout,
+    pub(crate) drop_fn: Option<unsafe fn(ErasedPtr<'_>)>,
 
-    drop_fn: Option<unsafe fn(ErasedPtr<'_>)>,
+    data: NonNull<u8>,
 
     len: usize,      // Specified in elements, not bytes
     capacity: usize, // Specified in elements, not bytes
@@ -104,8 +104,8 @@ impl ErasedVec {
 
     pub unsafe fn get<T>(&self, index: usize) -> &T {
         assert!(index < self.len);
-        let ptr = self.data.as_ptr().cast::<T>().add(index);
-        ptr.as_ref().unwrap()
+        let ptr = std::mem::transmute::<NonNull<T>, *const T>(self.data.cast::<T>());
+        ptr.add(index).as_ref().unwrap()
     }
 
     pub unsafe fn get_mut<T>(&mut self, index: usize) -> &mut T {
@@ -203,6 +203,24 @@ impl ErasedVec {
             unsafe { fun(ptr) }
         }
     }
+
+    /// # SAFETY
+    /// The caller must ensure that the type of self and the data of `source` are the same
+    /// and that the source must correctly deal with dropping the copied item
+    pub fn copy_from(&self, dest_index: usize, source: &ErasedVec, source_index: usize) {
+        assert!(dest_index < self.len);
+        assert!(source_index < source.len);
+        assert!(self.layout == source.layout, "layout mismatch!");
+
+        unsafe {
+            let dest_addr = self.data.as_ptr().add(dest_index * self.layout.size());
+            let source_addr = source
+                .data
+                .as_ptr()
+                .add(source_index * source.layout.size());
+            dest_addr.copy_from(source_addr, self.layout.size());
+        }
+    }
 }
 
 impl Drop for ErasedVec {
@@ -269,7 +287,12 @@ fn array_layout(layout: Layout, elements: usize) -> Layout {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, ops::DerefMut, rc::Rc};
+    use std::{
+        cell::RefCell,
+        ops::DerefMut,
+        rc::Rc,
+        sync::{Arc, RwLock},
+    };
 
     use super::ErasedVec;
 
@@ -405,6 +428,54 @@ mod tests {
             vec.drop_at(0);
         }
     }
+
+    #[test]
+    fn drop_test_2() {
+        let counter = Arc::new(RwLock::new(0));
+        struct TestDrop2 {
+            counter: Arc<RwLock<usize>>,
+        }
+        impl Drop for TestDrop2 {
+            fn drop(&mut self) {
+                let mut re = self.counter.write().unwrap();
+                let re = re.deref_mut();
+                *re += 1;
+            }
+        }
+        unsafe {
+            let mut vec = ErasedVec::new_typed::<TestDrop2>(true, 0);
+            vec.push_back(TestDrop2 {
+                counter: counter.clone(),
+            });
+            vec.push_back(TestDrop2 {
+                counter: counter.clone(),
+            });
+            vec.push_back(TestDrop2 {
+                counter: counter.clone(),
+            });
+            vec.push_back(TestDrop2 {
+                counter: counter.clone(),
+            });
+            vec.push_back(TestDrop2 {
+                counter: counter.clone(),
+            });
+            vec.push_back(TestDrop2 {
+                counter: counter.clone(),
+            });
+            for i in 0..vec.len() {
+                vec.drop_at(i);
+            }
+            let c: usize = *counter.read().unwrap();
+            assert_eq!(c, 6);
+
+            let mut vec = ErasedVec::new_typed::<TestStruct>(true, 1);
+            vec.push_back(TestStruct {
+                foo: 42,
+                string: "Hello World".to_string(),
+            });
+            vec.drop_at(0);
+        }
+    }
     #[test]
     fn zero_sized() {
         unsafe {
@@ -443,6 +514,33 @@ mod tests {
 
             assert_eq!(vec.len(), 0);
             drop(vec)
+        }
+    }
+
+    #[test]
+    fn copy_vec() {
+        struct TestStruct {
+            number: u32,
+            string: String,
+        }
+
+        unsafe {
+            let mut vec1 = ErasedVec::new_typed::<TestStruct>(true, 1);
+            let mut vec2 = ErasedVec::new_typed::<TestStruct>(true, 1);
+
+            const STR: &str = "Hello World!";
+            vec1.push_back(TestStruct {
+                number: 42,
+                string: STR.to_owned(),
+            });
+
+            vec2.ensure_len(1);
+            vec2.copy_from(0, &vec1, 0);
+
+            assert_eq!(vec2.get::<TestStruct>(0).number, 42);
+            assert_eq!(vec2.get::<TestStruct>(0).string, STR);
+
+            vec2.drop_at(0);
         }
     }
 }

@@ -32,6 +32,14 @@ impl TypeRegistrar {
     pub fn get_maybe<T: 'static>(&self) -> Option<UniqueTypeId> {
         self.registrations.get(&TypeId::of::<T>()).cloned()
     }
+
+    pub(crate) fn get_from_type_id(&mut self, blob_ty_id: TypeId) -> UniqueTypeId {
+        *self.registrations.entry(blob_ty_id).or_insert_with(|| {
+            let id = self.counter;
+            self.counter += 1;
+            UniqueTypeId(id)
+        })
+    }
 }
 
 #[cfg(test)]

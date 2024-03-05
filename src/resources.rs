@@ -72,7 +72,7 @@ impl<const SEND: bool> ResourceData<SEND> {
 
 #[derive(Default)]
 pub(crate) struct Resources<const SEND: bool> {
-    resources: SparseSet<ComponentId, ResourceData<SEND>>,
+    pub(crate) resources: SparseSet<ComponentId, ResourceData<SEND>>,
 }
 
 impl<const SEND: bool> Resources<SEND> {
@@ -135,6 +135,14 @@ impl<const SEND: bool> Resources<SEND> {
             _ph_world: PhantomData,
             ptr: p,
         })
+    }
+}
+
+impl<const SEND: bool> Drop for Resources<SEND> {
+    fn drop(&mut self) {
+        for res in self.resources.iter() {
+            unsafe { res.1.data_storage.drop_at(0) };
+        }
     }
 }
 

@@ -183,6 +183,16 @@ impl<F, A> SystemContainer<F, A> {
     }
 }
 
+impl<F, A> Drop for SystemContainer<F, A> {
+    fn drop(&mut self) {
+        for data in &mut self.system_data {
+            unsafe {
+                data.drop_at(0);
+            }
+        }
+    }
+}
+
 macro_rules! impl_system {
     ($($param:ident:$idx:expr)*) => {
         impl<$($param: SystemParam + Send + Sync + 'static,)* FUN: Fn($($param,)*) + Send + Sync + 'static> System
@@ -190,8 +200,6 @@ macro_rules! impl_system {
         {
 
             fn get_name(&self) -> Cow<'static, str> {
-
-
                 self.fun_name.clone()
             }
 
