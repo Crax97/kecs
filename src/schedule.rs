@@ -102,7 +102,8 @@ unsafe impl Scheduler for LinearScheduler {
 }
 
 /// # Safety
-///   Since the systems are scheduled to be run sequentially, only one system at a time can access the system's resources
+/// The scheduler will run systems in parallel only when their dependencies (or access modes) don't overlap
+/// Otherwise, the systems will be run sequentially
 unsafe impl Scheduler for GraphScheduler {
     type SystemId = NodeIndex;
 
