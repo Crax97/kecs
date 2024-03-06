@@ -1,7 +1,7 @@
 use std::{any::TypeId, collections::HashMap};
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
-pub struct UniqueTypeId(pub(crate) usize);
+pub struct UniqueTypeId(pub(crate) usize, &'static str);
 
 #[derive(Default, Debug)]
 pub struct TypeRegistrar {
@@ -17,7 +17,7 @@ impl TypeRegistrar {
             .or_insert_with(|| {
                 let id = self.counter;
                 self.counter += 1;
-                UniqueTypeId(id)
+                UniqueTypeId(id, std::any::type_name::<T>())
             })
     }
 
@@ -33,11 +33,15 @@ impl TypeRegistrar {
         self.registrations.get(&TypeId::of::<T>()).cloned()
     }
 
-    pub(crate) fn get_from_type_id(&mut self, blob_ty_id: TypeId) -> UniqueTypeId {
+    pub(crate) fn get_from_type_id(
+        &mut self,
+        blob_ty_id: TypeId,
+        type_name: &'static str,
+    ) -> UniqueTypeId {
         *self.registrations.entry(blob_ty_id).or_insert_with(|| {
             let id = self.counter;
             self.counter += 1;
-            UniqueTypeId(id)
+            UniqueTypeId(id, type_name)
         })
     }
 }

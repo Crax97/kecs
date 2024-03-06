@@ -114,8 +114,9 @@ impl<S: Scheduler> KecsWorld<S> {
                 CommandType::RemoveComponent {
                     entity,
                     component_ty,
+                    component_ty_name,
                 } => {
-                    self.remove_component_dynamic(entity, component_ty);
+                    self.remove_component_dynamic(entity, component_ty, component_ty_name);
                 }
                 CommandType::AddResource { resource } => {
                     self.add_resource_dynamic(resource);
@@ -145,9 +146,14 @@ impl<S: Scheduler> KecsWorld<S> {
         }
     }
 
-    fn remove_component_dynamic(&mut self, entity: Entity, component_ty: TypeId) {
+    fn remove_component_dynamic(
+        &mut self,
+        entity: Entity,
+        component_ty: TypeId,
+        type_name: &'static str,
+    ) {
         self.container
-            .remove_component_from_type_id(entity, component_ty);
+            .remove_component_from_type_id(entity, component_ty, type_name);
 
         self.update_systems(entity);
     }

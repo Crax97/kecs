@@ -1,4 +1,7 @@
-use std::{any::TypeId, collections::HashMap};
+use std::{
+    any::{type_name, TypeId},
+    collections::HashMap,
+};
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
@@ -69,6 +72,7 @@ impl<'world> Commands<'world> {
             .send(CommandType::RemoveComponent {
                 entity,
                 component_ty: TypeId::of::<T>(),
+                component_ty_name: type_name::<T>(),
             })
             .expect("Failed to send RemoveComponent command");
     }
@@ -120,6 +124,7 @@ where
 pub(crate) struct TypedBlob {
     pub(crate) blob_ty_id: TypeId,
     pub(crate) data: ErasedVec,
+    pub(crate) type_name: Option<&'static str>,
 }
 
 impl TypedBlob {
@@ -132,6 +137,7 @@ impl TypedBlob {
         Self {
             blob_ty_id: TypeId::of::<T>(),
             data: vec,
+            type_name: Some(type_name::<T>()),
         }
     }
 }
@@ -151,6 +157,7 @@ pub(crate) enum CommandType {
     RemoveComponent {
         entity: Entity,
         component_ty: TypeId,
+        component_ty_name: &'static str,
     },
     AddResource {
         resource: TypedBlob,

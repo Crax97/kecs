@@ -16,12 +16,6 @@ use crate::{
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Default, Clone, Copy)]
 pub struct ComponentId(UniqueTypeId);
 
-impl From<usize> for ComponentId {
-    fn from(value: usize) -> Self {
-        ComponentId(UniqueTypeId(value))
-    }
-}
-
 impl From<ComponentId> for usize {
     fn from(value: ComponentId) -> Self {
         value.0 .0
@@ -199,12 +193,19 @@ impl WorldContainer {
         entity: Entity,
         component: TypedBlob,
     ) {
-        let component_id = self.get_or_create_component_id_dynamic(component.blob_ty_id);
+        let component_id = self.get_or_create_component_id_dynamic(
+            component.blob_ty_id,
+            component.type_name.expect("No type name"),
+        );
         self.add_component_dynamic(entity, component_id, &component.data);
     }
 
-    fn get_or_create_component_id_dynamic(&mut self, blob_ty_id: TypeId) -> ComponentId {
-        let id = self.registrar.get_from_type_id(blob_ty_id);
+    fn get_or_create_component_id_dynamic(
+        &mut self,
+        blob_ty_id: TypeId,
+        type_name: &'static str,
+    ) -> ComponentId {
+        let id = self.registrar.get_from_type_id(blob_ty_id, type_name);
         ComponentId(id)
     }
 
@@ -238,8 +239,13 @@ impl WorldContainer {
         self.update_entity_archetype(entity);
     }
 
-    pub(crate) fn remove_component_from_type_id(&mut self, entity: Entity, component_ty: TypeId) {
-        let component_id = self.get_or_create_component_id_dynamic(component_ty);
+    pub(crate) fn remove_component_from_type_id(
+        &mut self,
+        entity: Entity,
+        component_ty: TypeId,
+        type_name: &'static str,
+    ) {
+        let component_id = self.get_or_create_component_id_dynamic(component_ty, type_name);
         Self::remove_component_untyped(
             entity,
             self.entity_manager.entity_info_mut(entity).unwrap(),
