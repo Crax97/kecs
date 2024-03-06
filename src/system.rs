@@ -38,6 +38,9 @@ pub trait SystemParam: Sized {
         info: &EntityInfo,
     );
 
+    /// This method is called when  an [`Entity`] is destroyed
+    fn on_entity_destroyed(state: &mut Self::State, store: &WorldContainer, entity: Entity);
+
     /// This method should return true if the parameter exclusively accesses a parameter
     fn is_exclusive(world: &WorldContainer) -> bool;
 }
@@ -58,6 +61,9 @@ pub trait System: Send + Sync + 'static {
         &self,
         world: &mut WorldContainer,
     ) -> SparseSet<ComponentId, AccessMode>;
+
+    /// Called when an entity is destroyed
+    fn on_entity_destroyed(&mut self, store: &WorldContainer, entity: Entity);
 
     /// Called when the state of an entity changes
     fn on_entity_changed(&mut self, store: &WorldContainer, entity: Entity, info: &EntityInfo);
@@ -128,6 +134,10 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
     fn is_exclusive(_world: &WorldContainer) -> bool {
         false
     }
+
+    fn on_entity_destroyed(state: &mut Self::State, store: &WorldContainer, entity: Entity) {
+        state.entities.remove(&entity);
+    }
 }
 
 impl SystemParam for &mut WorldContainer {
@@ -158,6 +168,8 @@ impl SystemParam for &mut WorldContainer {
         _info: &EntityInfo,
     ) {
     }
+
+    fn on_entity_destroyed(_state: &mut Self::State, _store: &WorldContainer, _entity: Entity) {}
 
     fn is_exclusive(_world: &WorldContainer) -> bool {
         true
@@ -219,7 +231,7 @@ macro_rules! impl_system {
             }
 
             fn run(&mut self, store: &mut WorldContainer) {
-                (self.fun)($($param::create(unsafe { self.system_data[$idx].get::<$param::State>(0) }, store),)*);
+                (self.fun)($($param::create(unsafe {self.system_data[$idx].get::<$param::State>(0) }, store),)*);
             }
 
             fn on_entity_changed(&mut self, store: &WorldContainer, entity: Entity, info: &EntityInfo) {
@@ -227,6 +239,15 @@ macro_rules! impl_system {
                     $(
                         let state = unsafe { self.system_data[$idx].get_mut::<$param::State>(0) };
                         $param::on_entity_changed(state, store, entity, info);
+                    )*
+                }
+            }
+
+            fn on_entity_destroyed(&mut self, store: &WorldContainer, entity: Entity) {
+                {
+                    $(
+                        let state = unsafe { self.system_data[$idx].get_mut::<$param::State>(0) };
+                        $param::on_entity_destroyed(state, store, entity);
                     )*
                 }
             }
@@ -351,6 +372,8 @@ impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rw
     ) {
     }
 
+    fn on_entity_destroyed(_state: &mut Self::State, _store: &WorldContainer, _entity: Entity) {}
+
     fn is_exclusive(world: &WorldContainer) -> bool {
         let id = world.get_component_id_assertive::<R>();
         !world
@@ -401,6 +424,8 @@ impl<'rworld, 'res, R: Resource + 'static> SystemParam for ResMut<'rworld, 'res,
         _info: &EntityInfo,
     ) {
     }
+
+    fn on_entity_destroyed(_state: &mut Self::State, _store: &WorldContainer, _entity: Entity) {}
 
     fn is_exclusive(world: &WorldContainer) -> bool {
         let id = world.get_component_id_assertive::<R>();

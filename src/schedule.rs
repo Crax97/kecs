@@ -92,12 +92,15 @@ unsafe impl Scheduler for LinearScheduler {
     }
 
     fn on_entity_updated(&mut self, world: &mut WorldContainer, entity: Entity) {
-        let info = world
-            .get_entity_info(entity)
-            .expect("Failed to find entity info");
-        self.systems
-            .iter_mut()
-            .for_each(|s| s.on_entity_changed(world, entity, info))
+        if let Some(info) = world.get_entity_info(entity) {
+            self.systems
+                .iter_mut()
+                .for_each(|s| s.on_entity_changed(world, entity, info))
+        } else {
+            self.systems
+                .iter_mut()
+                .for_each(|s| s.on_entity_destroyed(world, entity))
+        }
     }
 }
 
@@ -175,14 +178,19 @@ unsafe impl Scheduler for GraphScheduler {
     }
 
     fn on_entity_updated(&mut self, world: &mut WorldContainer, entity: Entity) {
-        let info = world
-            .get_entity_info(entity)
-            .expect("Failed to find entity info");
-        self.graph.node_weights_mut().for_each(|s| {
-            if let Some(s) = &mut s.system {
-                s.on_entity_changed(world, entity, info)
-            }
-        })
+        if let Some(info) = world.get_entity_info(entity) {
+            self.graph.node_weights_mut().for_each(|s| {
+                if let Some(s) = &mut s.system {
+                    s.on_entity_changed(world, entity, info)
+                }
+            })
+        } else {
+            self.graph.node_weights_mut().for_each(|s| {
+                if let Some(s) = &mut s.system {
+                    s.on_entity_destroyed(world, entity)
+                }
+            })
+        }
     }
 }
 

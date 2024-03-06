@@ -108,6 +108,8 @@ impl<'cworld> SystemParam for Commands<'cworld> {
     fn is_exclusive(_world: &WorldContainer) -> bool {
         false
     }
+
+    fn on_entity_destroyed(_state: &mut Self::State, _store: &WorldContainer, _entity: Entity) {}
 }
 
 #[cfg(test)]

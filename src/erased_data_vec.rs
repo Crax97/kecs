@@ -1,4 +1,4 @@
-use std::{alloc::Layout, marker::PhantomData, num::NonZeroUsize, ptr::NonNull};
+use std::{alloc::Layout, marker::PhantomData, mem::MaybeUninit, num::NonZeroUsize, ptr::NonNull};
 
 pub struct ErasedPtr<'a> {
     data: NonNull<u8>,
@@ -104,7 +104,7 @@ impl ErasedVec {
 
     pub unsafe fn get<T>(&self, index: usize) -> &T {
         assert!(index < self.len);
-        let ptr = std::mem::transmute::<NonNull<T>, *const T>(self.data.cast::<T>());
+        let ptr = self.data.cast::<T>().as_ptr();
         ptr.add(index).as_ref().unwrap()
     }
 

@@ -31,12 +31,12 @@ impl<S: Scheduler> KecsWorld<S> {
     /// Destroys an entity, along with all of its components
     pub fn destroy_entity(&mut self, entity: Entity) {
         self.container.remove_entity(entity);
+        self.update_systems(entity);
     }
 
     /// Adds a component to the [`Entity`]: if the entity already had the component, it is overwritten
     pub fn add_component<T: 'static>(&mut self, entity: Entity, component: T) {
         self.container.add_component(entity, component);
-
         self.update_systems(entity);
     }
 

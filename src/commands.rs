@@ -187,7 +187,7 @@ impl CommandsReceiver {
 mod tests {
     use std::sync::{Arc, RwLock};
 
-    use crate::{commands::Commands, Entity, Query, Res, Resource, World};
+    use crate::{commands::Commands, Entity, Query, Res, ResMut, Resource, World};
 
     fn make_world() -> World {
         World::new()
@@ -264,6 +264,51 @@ mod tests {
                 .unwrap(),
             3
         );
+    }
+
+    #[test]
+    fn destroy_entity() {
+        let mut world = make_world();
+
+        struct SpawnCount {
+            count: u32,
+        }
+        impl Resource for SpawnCount {}
+
+        struct Bullet {
+            ticks_alive: u32,
+        }
+
+        let destroy_counter = Arc::<RwLock<usize>>::default();
+        let destroy_counter_2 = destroy_counter.clone();
+        world.add_resource(SpawnCount { count: 10 });
+        world.add_system(|mut counter: ResMut<SpawnCount>, mut commands: Commands| {
+            for _ in 0..counter.count {
+                let mut entity = commands.spawn_entity();
+                entity.with_component(Bullet { ticks_alive: 10 });
+                entity.build();
+            }
+            counter.count = 0;
+        });
+        world.add_system(
+            move |bullets: Query<(Entity, &mut Bullet)>, mut commands: Commands| {
+                for (entity, bullet) in bullets.iter() {
+                    if bullet.ticks_alive == 0 {
+                        let mut destroyed = destroy_counter_2.write().unwrap();
+                        *destroyed += 1;
+                        commands.destroy_entity(entity);
+                    } else {
+                        bullet.ticks_alive -= 1;
+                    }
+                }
+            },
+        );
+
+        for _ in 0..100 {
+            world.update();
+        }
+
+        assert_eq!(*destroy_counter.read().unwrap(), 10);
     }
 
     #[test]
