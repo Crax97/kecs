@@ -80,6 +80,9 @@ fn main() {
     world.add_system(print_player_position);
     world.add_system(print_transform_system);
 
+    // the GraphScheduler allows for printing the scheduled systems in Dot format
+    world.scheduler().print_jobs();
+
     // In real code this should belong in an event loop
     for i in 0..3 {
         println!("Frame {i}");

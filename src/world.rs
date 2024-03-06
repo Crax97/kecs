@@ -92,6 +92,11 @@ impl<S: Scheduler> KecsWorld<S> {
     pub fn commands(&self) -> Commands {
         self.container.commands()
     }
+
+    /// Gets a reference to this world's [`Scheduler`]
+    pub fn scheduler(&self) -> &S {
+        &self.scheduler
+    }
 }
 
 impl<S: Scheduler> Drop for KecsWorld<S> {

@@ -251,6 +251,13 @@ impl WorldContainer {
     }
 }
 
+impl ComponentId {
+    /// Gets this component's full name
+    pub fn name(&self) -> &'static str {
+        self.0 .1
+    }
+}
+
 /// An unsafe pointer to a [`WorldContainer`]
 pub struct UnsafeWorldPtr<'a>(UnsafeMutPtr<'a, WorldContainer>);
 impl<'a> Clone for UnsafeWorldPtr<'a> {

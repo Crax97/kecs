@@ -436,13 +436,37 @@ impl std::fmt::Display for SystemGraphNode {
                 .as_ref()
                 .map(|s| s.get_name())
                 .unwrap_or("Root".into()),
-        )
+        )?;
+
+        if !self.dependencies.is_empty() {
+            writeln!(f)?;
+        }
+
+        for (component, access_mode) in self.dependencies.iter() {
+            if *access_mode == AccessMode::Read {
+                f.write_fmt(format_args!("R({}),", &component.name()))?;
+            } else {
+                f.write_fmt(format_args!("W({}),", &component.name()))?;
+            }
+        }
+
+        Ok(())
     }
 }
 
 impl std::fmt::Display for SystemGraphEdge {
-    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // TODO: Write compont names + accesses
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for SystemGraphChange {
+            component,
+            new_access_mode,
+        } in &self.changes
+        {
+            if *new_access_mode == AccessMode::Read {
+                f.write_fmt(format_args!("R({})", &component.name()))?;
+            } else {
+                f.write_fmt(format_args!("W({})", &component.name()))?;
+            }
+        }
         Ok(())
     }
 }
