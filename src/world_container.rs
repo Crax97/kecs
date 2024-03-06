@@ -14,16 +14,11 @@ use crate::{
 
 /// The unique id of any component
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Default, Clone, Copy)]
-pub struct ComponentId(UniqueTypeId);
+pub struct ComponentId(pub(crate) UniqueTypeId);
 
 impl From<ComponentId> for usize {
     fn from(value: ComponentId) -> Self {
         value.0 .0
-    }
-}
-impl From<usize> for Entity {
-    fn from(value: usize) -> Self {
-        Entity(value as u32)
     }
 }
 

@@ -135,7 +135,7 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
         false
     }
 
-    fn on_entity_destroyed(state: &mut Self::State, store: &WorldContainer, entity: Entity) {
+    fn on_entity_destroyed(state: &mut Self::State, _store: &WorldContainer, entity: Entity) {
         state.entities.remove(&entity);
     }
 }

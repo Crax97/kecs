@@ -1,7 +1,7 @@
 use std::{any::TypeId, collections::HashMap};
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
-pub struct UniqueTypeId(pub(crate) usize, &'static str);
+pub struct UniqueTypeId(pub(crate) usize, pub(crate) &'static str);
 
 #[derive(Default, Debug)]
 pub struct TypeRegistrar {

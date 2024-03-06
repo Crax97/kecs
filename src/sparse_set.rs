@@ -25,7 +25,7 @@ pub struct SparseSet<I: SparseIndex, T> {
 impl<I: SparseIndex + Clone, T: Clone> Clone for SparseKey<I, T> {
     fn clone(&self) -> Self {
         Self {
-            index: self.index.clone(),
+            index: self.index,
             value: self.value.clone(),
         }
     }
