@@ -418,6 +418,14 @@ impl Drop for WorldContainer {
 }
 
 impl<'a> UnsafeWorldPtr<'a> {
+    pub(crate) unsafe fn get_mut(self) -> &'a mut WorldContainer {
+        self.0.into_mut()
+    }
+
+    pub(crate) fn copied(&self) -> Self {
+        Self(UnsafeMutPtr(self.0 .0, PhantomData))
+    }
+
     pub(crate) unsafe fn get_component<A: 'static>(&self, entity: Entity) -> UnsafePtr<'a, A> {
         let store = unsafe { self.0 .0.as_mut().unwrap() };
         let component_id = store.get_component_id_assertive::<A>();

@@ -8,6 +8,7 @@ use petgraph::dot::Dot;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Graph};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::query::AccessMode;
 use crate::sparse_set::SparseSet;
@@ -163,16 +164,42 @@ unsafe impl Scheduler for GraphScheduler {
     }
 
     fn execute(&mut self, world: &mut WorldContainer) {
+        #[derive(Clone)]
+        struct SystemPtr(*mut dyn System);
+
+        unsafe impl Send for SystemPtr {}
+        unsafe impl Sync for SystemPtr {}
+
         if self.changed_schedule {
             self.cached_schedule = self.compute_schedule();
             self.changed_schedule = false;
         }
-        for (i, schedule) in self.cached_schedule.groups.iter().enumerate() {
-            for job in &schedule.jobs {
-                let system = self.graph.node_weight_mut(*job).unwrap();
-                if let Some(system) = &mut system.system {
-                    system.run(world);
-                }
+        for schedule in self.cached_schedule.groups.iter() {
+            let world_ptr = unsafe { world.get_mut_ptr() };
+            let job_ptrs =
+                schedule
+                    .jobs
+                    .iter()
+                    .map(|&job| {
+                        let system = self.graph.node_weight_mut(job).unwrap();
+                        SystemPtr(
+                            system.system.as_mut().map(|m| m.as_mut()).unwrap() as *mut dyn System
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+            // SAFETY: All the pointers point to different systems, and the scheduler took care of ensuring
+            // that systems in this schedule don't write to the same resources
+            let exec_system = |sys: &SystemPtr| unsafe {
+                let system = sys.0.as_mut().unwrap();
+                system.run(world_ptr.copied().get_mut())
+            };
+            if cfg!(miri) {
+                // Don't use rayon with miri, since the global rayon pool is never destroyed
+                // even after the main thread exits (miri complains about that)
+                job_ptrs.iter().for_each(exec_system)
+            } else {
+                job_ptrs.par_iter().for_each(exec_system)
             }
         }
     }
@@ -496,7 +523,6 @@ mod tests {
     fn write_component_2(_: Query<&mut Component2>) {}
 
     fn read_component_1(_: Query<&Component1>) {}
-    fn read_component_2(_: Query<&Component2>) {}
     fn non_parallel_system(_: &mut WorldContainer) {}
     fn read_write_component_1(_: Query<&Component1>, _: Query<&mut Component1>) {}
 

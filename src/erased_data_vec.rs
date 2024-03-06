@@ -1,4 +1,4 @@
-use std::{alloc::Layout, marker::PhantomData, mem::MaybeUninit, num::NonZeroUsize, ptr::NonNull};
+use std::{alloc::Layout, marker::PhantomData, num::NonZeroUsize, ptr::NonNull};
 
 pub struct ErasedPtr<'a> {
     data: NonNull<u8>,
