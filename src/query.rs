@@ -60,9 +60,9 @@ pub trait QueryParam {
 ///         println!("B's value is {}", b.0);
 ///    }
 /// }
-/// world.add_system(query_a);
-/// world.add_system(query_b);
-/// world.update();
+/// world.add_system(0, query_a);
+/// world.add_system(0, query_b);
+/// world.update(0);
 /// ```
 pub struct Query<'world, 'state, A: QueryParam> {
     _ph: PhantomData<A>,
@@ -103,6 +103,18 @@ impl<'world, 'state, A: QueryParam> Query<'world, 'state, A> {
             world_ptr: self.world_ptr.clone(),
             entity_iterator: self.state.entities.iter(),
         }
+    }
+
+    /// Returns the single element iterated by this query, panics if there is more than one
+    /// or if there are no items
+    pub fn single(&self) -> A {
+        let mut iter = self.iter();
+        let first = iter.next().expect("No entity matches the query");
+        assert!(
+            iter.next().is_none(),
+            "The query iterates more than one item"
+        );
+        first
     }
 }
 

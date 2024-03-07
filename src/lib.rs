@@ -41,12 +41,14 @@
 //!         println!("item name {}", item.0);
 //!     }    
 //! }
-//! world.add_system(iter_only_foos);
-//! world.add_system(iter_only_bazs);
-//! world.add_system(print_names);
+//! // To group systems together you can use a Label
+//! let run_systems = "label";
+//! world.add_system(run_systems, iter_only_foos);
+//! world.add_system(run_systems, iter_only_bazs);
+//! world.add_system(run_systems, print_names);
 //!
 //! // Fire in the hole!
-//! world.update();
+//! world.update(run_systems);
 //! ```
 mod archetype;
 mod entity_manager;
@@ -116,7 +118,7 @@ impl<'cworld> SystemParam for Commands<'cworld> {
 mod tests {
     use std::sync::{Arc, RwLock};
 
-    use crate::{query::Query, World};
+    use crate::{query::Query, IntoLabel, World};
 
     #[test]
     fn iter_n_times() {
@@ -146,8 +148,9 @@ mod tests {
             );
         }
 
-        world.add_system(counting_system);
-        world.update();
+        let label = "test".into_label();
+        world.add_system(label, counting_system);
+        world.update(label);
 
         assert_eq!(counter.read().unwrap().to_owned(), ENTITIES);
     }
@@ -169,7 +172,8 @@ mod tests {
 
         let mut world = World::new();
 
-        world.add_system(counting_system);
+        let label = "test".into_label();
+        world.add_system(label, counting_system);
 
         const ENTITIES: usize = 100;
         for _ in 0..ENTITIES {
@@ -182,7 +186,7 @@ mod tests {
             );
         }
 
-        world.update();
+        world.update(label);
 
         assert_eq!(counter.read().unwrap().to_owned(), ENTITIES);
     }
@@ -223,11 +227,47 @@ mod tests {
             },
         );
 
-        world.add_system(counting_system);
+        let label = "test".into_label();
+        world.add_system(label, counting_system);
 
         world.remove_component::<TestComponent>(entity);
-        world.update();
+        world.update(label);
 
         assert_eq!(counter.read().unwrap().to_owned(), ENTITIES);
+    }
+
+    #[test]
+    fn labels_update_all_systems() {
+        let lab_1 = "lab_1".into_label();
+        let lab_2 = "lab_2".into_label();
+
+        let mut world = World::new();
+
+        struct TestComponentA;
+
+        let counter = Arc::<RwLock<usize>>::default();
+        let counter_2 = counter.clone();
+        let iter_all_components = move || {
+            let counter = counter_2.clone();
+            move |query: Query<&TestComponentA>| {
+                for _ in query.iter() {
+                    *counter.write().unwrap() += 1
+                }
+            }
+        };
+
+        world.add_system(lab_1, iter_all_components());
+        world.add_system(lab_2, iter_all_components());
+
+        world.update(lab_1);
+        world.update(lab_2);
+        assert_eq!(*counter.read().unwrap(), 0);
+
+        let ent = world.new_entity();
+        world.add_component(ent, TestComponentA);
+
+        world.update(lab_1);
+        world.update(lab_2);
+        assert_eq!(*counter.read().unwrap(), 2);
     }
 }

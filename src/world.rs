@@ -1,15 +1,29 @@
 use std::any::TypeId;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use crate::commands::{CommandType, Commands, CommandsReceiver, TypedBlob};
-use crate::{system::IntoSystem, Entity, GraphScheduler, Resource, Scheduler, WorldContainer};
+use crate::{
+    system::IntoSystem, Entity, GraphScheduler, Resource, Scheduler, System, WorldContainer,
+};
 
 /// The [`KecsWorld`] is a wrapper around a [`Scheduler`] and the [`WorldContainer`] it acts on
 pub struct KecsWorld<S: Scheduler = GraphScheduler> {
     container: WorldContainer,
-    scheduler: S,
+    schedulers: HashMap<Label, S>,
 
     commands_receiver: CommandsReceiver,
+}
+
+/// A [`Label`] is used to identify a set of systems that should run together in a [`KecsWorld`]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Debug)]
+pub struct Label(u64);
+
+/// Anything that can be turn into a [`Label`]
+/// This trait is automatically implemented for everything [`Hash`]able
+pub trait IntoLabel {
+    /// Turns self into a [`Label`]
+    fn into_label(self) -> Label;
 }
 
 impl<S: Scheduler> KecsWorld<S> {
@@ -18,7 +32,7 @@ impl<S: Scheduler> KecsWorld<S> {
         let (commands, commands_receiver) = Commands::create();
         Self {
             container: WorldContainer::new(commands),
-            scheduler: S::default(),
+            schedulers: Default::default(),
             commands_receiver,
         }
     }
@@ -78,14 +92,36 @@ impl<S: Scheduler> KecsWorld<S> {
     }
 
     /// Adds a system to the world, that will then be scheduled according to the [`crate::Scheduler`]
-    pub fn add_system<ARGS, SYS: IntoSystem<ARGS>>(&mut self, system: SYS) -> S::SystemId {
-        self.scheduler.add_system(&mut self.container, system)
+    pub fn add_system<ARGS, SYS: IntoSystem<ARGS>>(
+        &mut self,
+        label: impl IntoLabel,
+        system: SYS,
+    ) -> S::SystemId {
+        self.schedulers
+            .entry(label.into_label())
+            .or_default()
+            .add_system(&mut self.container, system)
     }
 
-    /// Executes the queued [`Commands`] and runs all the scheduled [`crate::System`]
-    pub fn update(&mut self) {
+    /// Runs a system exclusively
+    pub fn run_oneshot<ARGS, SYS: IntoSystem<ARGS>>(&mut self, system: SYS) {
+        let mut system = system.into_system();
+        system.init(&mut self.container);
+
+        self.container.iter_all_entities().for_each(|(e, info)| {
+            system.on_entity_changed(&self.container, e, info);
+        });
+
+        system.run(&mut self.container);
+    }
+
+    /// Executes the queued [`Commands`] and runs all the scheduled [`crate::System`] within a [`Label`]
+    pub fn update(&mut self, label: impl IntoLabel) {
         self.execute_commands();
-        self.scheduler.execute(&mut self.container);
+        self.schedulers
+            .entry(label.into_label())
+            .or_default()
+            .execute(&mut self.container);
     }
 
     /// Creates the [`Commands`] for this World
@@ -94,8 +130,10 @@ impl<S: Scheduler> KecsWorld<S> {
     }
 
     /// Gets a reference to this world's [`Scheduler`]
-    pub fn scheduler(&self) -> &S {
-        &self.scheduler
+    pub fn scheduler(&self, label: impl IntoLabel) -> &S {
+        self.schedulers
+            .get(&label.into_label())
+            .expect("Failed to find systems with this label")
     }
 }
 
@@ -168,6 +206,14 @@ impl<S: Scheduler> KecsWorld<S> {
     }
 }
 
+impl<T: Hash> IntoLabel for T {
+    fn into_label(self) -> Label {
+        let mut hasher = std::hash::DefaultHasher::new();
+        self.hash(&mut hasher);
+        Label(hasher.finish())
+    }
+}
+
 impl<S: Scheduler> Default for KecsWorld<S> {
     fn default() -> Self {
         Self::new()
@@ -176,7 +222,8 @@ impl<S: Scheduler> Default for KecsWorld<S> {
 
 impl<S: Scheduler> KecsWorld<S> {
     fn update_systems(&mut self, entity: Entity) {
-        self.scheduler
-            .on_entity_updated(&mut self.container, entity);
+        self.schedulers.values_mut().for_each(|s| {
+            s.on_entity_updated(&mut self.container, entity);
+        });
     }
 }

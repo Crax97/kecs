@@ -233,11 +233,11 @@ mod tests {
         world.add_resource(CounterRes {
             counter: counter_out,
         });
-        world.add_system(spawn_entity);
-        world.add_system(increment_counter);
+        world.add_system(0, spawn_entity);
+        world.add_system(0, increment_counter);
 
         // No TestCounters spawned
-        world.update();
+        world.update(0);
         assert_eq!(
             *world
                 .get_resource::<CounterRes>()
@@ -249,7 +249,7 @@ mod tests {
         );
 
         // // One TestCounter spawned
-        world.update();
+        world.update(0);
         assert_eq!(
             *world
                 .get_resource::<CounterRes>()
@@ -261,7 +261,7 @@ mod tests {
         );
 
         // Two TestCounters spawned
-        world.update();
+        world.update(0);
         assert_eq!(
             *world
                 .get_resource::<CounterRes>()
@@ -289,15 +289,19 @@ mod tests {
         let destroy_counter = Arc::<RwLock<usize>>::default();
         let destroy_counter_2 = destroy_counter.clone();
         world.add_resource(SpawnCount { count: 10 });
-        world.add_system(|mut counter: ResMut<SpawnCount>, mut commands: Commands| {
-            for _ in 0..counter.count {
-                let mut entity = commands.spawn_entity();
-                entity.with_component(Bullet { ticks_alive: 10 });
-                entity.build();
-            }
-            counter.count = 0;
-        });
         world.add_system(
+            0,
+            |mut counter: ResMut<SpawnCount>, mut commands: Commands| {
+                for _ in 0..counter.count {
+                    let mut entity = commands.spawn_entity();
+                    entity.with_component(Bullet { ticks_alive: 10 });
+                    entity.build();
+                }
+                counter.count = 0;
+            },
+        );
+        world.add_system(
+            0,
             move |bullets: Query<(Entity, &mut Bullet)>, mut commands: Commands| {
                 for (entity, bullet) in bullets.iter() {
                     if bullet.ticks_alive == 0 {
@@ -312,7 +316,7 @@ mod tests {
         );
 
         for _ in 0..100 {
-            world.update();
+            world.update(0);
         }
 
         assert_eq!(*destroy_counter.read().unwrap(), 10);
@@ -350,19 +354,19 @@ mod tests {
             })
         }
 
-        world.add_system(spawn_entity);
-        world.add_system(increment_counter);
+        world.add_system(0, spawn_entity);
+        world.add_system(0, increment_counter);
 
         // No TestCounters spawned
-        world.update();
+        world.update(0);
         assert_eq!(get_counter(), 0);
 
         // One TestCounter spawned, but it was destroyed
-        world.update();
+        world.update(0);
         assert_eq!(get_counter(), 0);
 
         // Two TestCounters spawned, but they were destroyed
-        world.update();
+        world.update(0);
         assert_eq!(get_counter(), 0);
     }
 }

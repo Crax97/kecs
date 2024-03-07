@@ -94,9 +94,11 @@ fn print_player_position(query: Query<(&Player, Entity, &EntityName, &Transform)
 
 4. Schedule the systems for execution
 ```rust
-    world.add_system(update_bullet_position);
-    world.add_system(print_transform_system);
-    world.add_system(print_player_position);
+    // Use a label to group systems together
+    let example = "example";
+    world.add_system(example, update_bullet_position);
+    world.add_system(example, print_transform_system);
+    world.add_system(example, print_player_position);
 
 ```
 
@@ -106,7 +108,7 @@ fn print_player_position(query: Query<(&Player, Entity, &EntityName, &Transform)
     // In real code this should belong in an event loop
     for i in 0..3 {
         println!("Frame {i}");
-        world.update();
+        world.update(example);
         println!("\n\n");
     }
 ```

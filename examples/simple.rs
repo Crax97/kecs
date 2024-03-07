@@ -76,17 +76,18 @@ fn main() {
         world.add_component(player_entity, EntityName("Player".to_owned()));
     }
 
-    world.add_system(update_bullet_position);
-    world.add_system(print_player_position);
-    world.add_system(print_transform_system);
+    let label = 0;
+    world.add_system(label, update_bullet_position);
+    world.add_system(label, print_player_position);
+    world.add_system(label, print_transform_system);
 
     // the GraphScheduler allows for printing the scheduled systems in Dot format
-    world.scheduler().print_jobs();
+    world.scheduler(label).print_jobs();
 
     // In real code this should belong in an event loop
     for i in 0..3 {
         println!("Frame {i}");
-        world.update();
+        world.update(label);
         println!("\n\n");
     }
 }
