@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
 };
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam::channel::{unbounded, Receiver, Sender};
 
 use crate::{
     entity_manager::EntityAllocator, erased_data_vec::ErasedVec, Entity, Resource, WorldContainer,
