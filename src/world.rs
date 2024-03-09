@@ -1,6 +1,6 @@
 use std::any::TypeId;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::commands::{CommandType, Commands, CommandsReceiver, TypedBlob};
 use crate::{
@@ -18,6 +18,13 @@ pub struct KecsWorld<S: Scheduler = GraphScheduler> {
 /// A [`Label`] is used to identify a set of systems that should run together in a [`KecsWorld`]
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Debug)]
 pub struct Label(u64);
+
+impl Label {
+    /// Creates a new label
+    pub const fn new(elem: u64) -> Label {
+        Label(elem)
+    }
+}
 
 /// Anything that can be turn into a [`Label`]
 /// This trait is automatically implemented for everything [`Hash`]able
