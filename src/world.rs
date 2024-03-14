@@ -6,6 +6,7 @@ use crate::commands::{CommandType, Commands, CommandsReceiver, TypedBlob};
 use crate::{
     system::IntoSystem, Entity, GraphScheduler, Resource, Scheduler, System, WorldContainer,
 };
+use crate::{ComponentId, EntityInfo};
 
 /// The [`KecsWorld`] is a wrapper around a [`Scheduler`] and the [`WorldContainer`] it acts on
 pub struct KecsWorld<S: Scheduler = GraphScheduler> {
@@ -141,6 +142,15 @@ impl<S: Scheduler> KecsWorld<S> {
         self.schedulers
             .get(&label.into_label())
             .expect("Failed to find systems with this label")
+    }
+
+    /// Gets the ComponentId for the type T, creating it if it does not exists
+    pub fn get_type_registration<T: 'static>(&mut self) -> ComponentId {
+        self.container.get_or_create_component_id::<T>()
+    }
+
+    pub fn get_entity_info(&self, id: Entity) -> Option<EntityInfo> {
+        self.container.entity_manager.entity_info(id).cloned()
     }
 }
 
