@@ -211,10 +211,12 @@ macro_rules! impl_system {
             for SystemContainer<FUN, ($($param,)*)>
         {
 
+            #[allow(unused_variables)]
             fn get_name(&self) -> Cow<'static, str> {
                 self.fun_name.clone()
             }
 
+            #[allow(unused_variables)]
             fn init(&mut self, store: &mut WorldContainer) {
                 $(
                 self.system_data.push({
@@ -230,10 +232,12 @@ macro_rules! impl_system {
                 }
             }
 
+            #[allow(unused_variables)]
             fn run(&mut self, store: &mut WorldContainer) {
                 (self.fun)($($param::create(unsafe {self.system_data[$idx].get::<$param::State>(0) }, store),)*);
             }
 
+            #[allow(unused_variables)]
             fn on_entity_changed(&mut self, store: &WorldContainer, entity: Entity, info: &EntityInfo) {
                 {
                     $(
@@ -243,6 +247,7 @@ macro_rules! impl_system {
                 }
             }
 
+            #[allow(unused_variables)]
             fn on_entity_destroyed(&mut self, store: &WorldContainer, entity: Entity) {
                 {
                     $(
@@ -252,7 +257,9 @@ macro_rules! impl_system {
                 }
             }
 
+            #[allow(unused_variables)]
             fn compute_dependencies(&self, world: &mut WorldContainer) -> SparseSet<ComponentId, AccessMode> {
+                #[allow(unused_mut)]
                 let mut deps = Default::default();
                 $(
                 {
@@ -264,6 +271,7 @@ macro_rules! impl_system {
                 deps
             }
 
+            #[allow(unused_variables)]
             fn is_exclusive(&self, world: &WorldContainer) -> bool
             {
                 $(
@@ -292,6 +300,7 @@ macro_rules! impl_system {
     };
 }
 
+impl_system!();
 impl_system!(A:0);
 impl_system!(A:0 B:1);
 impl_system!(A:0 B:1 C:2);
