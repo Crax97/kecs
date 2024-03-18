@@ -14,7 +14,7 @@ pub trait SystemParam: Sized {
     type State: Send + Sync + 'static;
 
     /// `true` if the parameter is `&mut WorldContainer`
-    const IS_WORLD: bool;
+    const IS_MUT_WORLD: bool;
 
     /// This method is used to add this parameter's dependencies to the `components` [`SparseSet`]
     fn add_dependencies(
@@ -42,7 +42,7 @@ pub trait SystemParam: Sized {
     fn on_entity_destroyed(state: &mut Self::State, store: &WorldContainer, entity: Entity);
 
     /// This method should return true if the parameter exclusively accesses a parameter
-    fn is_exclusive(world: &WorldContainer) -> bool;
+    fn is_exclusive(world: &mut WorldContainer) -> bool;
 }
 
 /// The trait implemented by all systems, which can be added into a [`crate::Scheduler`].
@@ -69,12 +69,12 @@ pub trait System: Send + Sync + 'static {
     fn on_entity_changed(&mut self, store: &WorldContainer, entity: Entity, info: &EntityInfo);
 
     /// Must return true if the system should be scheduled on the main thread
-    fn is_exclusive(&self, world: &WorldContainer) -> bool;
+    fn is_exclusive(&self, world: &mut WorldContainer) -> bool;
 }
 
 pub trait IntoSystem<ARGS> {
     type SystemType: System;
-    const HAS_WORLD: bool;
+    const HAS_MUT_WORLD: bool;
     const NUM_PARAMS: usize;
 
     fn into_system(self) -> Self::SystemType;
@@ -82,7 +82,7 @@ pub trait IntoSystem<ARGS> {
 
 impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A> {
     type State = QueryState;
-    const IS_WORLD: bool = false;
+    const IS_MUT_WORLD: bool = false;
 
     fn add_dependencies(
         store: &mut WorldContainer,
@@ -131,7 +131,7 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
         }
     }
 
-    fn is_exclusive(_world: &WorldContainer) -> bool {
+    fn is_exclusive(_world: &mut WorldContainer) -> bool {
         false
     }
 
@@ -142,7 +142,7 @@ impl<'qworld, 'qstate, A: QueryParam> SystemParam for Query<'qworld, 'qstate, A>
 
 impl SystemParam for &mut WorldContainer {
     type State = ();
-    const IS_WORLD: bool = true;
+    const IS_MUT_WORLD: bool = true;
 
     fn add_dependencies(
         store: &mut WorldContainer,
@@ -171,8 +171,44 @@ impl SystemParam for &mut WorldContainer {
 
     fn on_entity_destroyed(_state: &mut Self::State, _store: &WorldContainer, _entity: Entity) {}
 
-    fn is_exclusive(_world: &WorldContainer) -> bool {
+    fn is_exclusive(_world: &mut WorldContainer) -> bool {
         true
+    }
+}
+
+impl SystemParam for &WorldContainer {
+    type State = ();
+    const IS_MUT_WORLD: bool = false;
+
+    fn add_dependencies(
+        store: &mut WorldContainer,
+        components: &mut SparseSet<ComponentId, AccessMode>,
+    ) {
+        let id_of_world = store.get_or_create_component_id::<WorldContainer>();
+        components.insert(id_of_world, AccessMode::Read);
+    }
+
+    fn create<'world, 'state>(_data: &'state Self::State, store: &'world mut WorldContainer) -> Self
+    where
+        'world: 'state,
+    {
+        unsafe { std::mem::transmute(store) }
+    }
+
+    fn create_initial_state(_store: &mut WorldContainer) -> Self::State {}
+
+    fn on_entity_changed(
+        _state: &mut Self::State,
+        _store: &WorldContainer,
+        _entity: Entity,
+        _info: &EntityInfo,
+    ) {
+    }
+
+    fn on_entity_destroyed(_state: &mut Self::State, _store: &WorldContainer, _entity: Entity) {}
+
+    fn is_exclusive(_world: &mut WorldContainer) -> bool {
+        false
     }
 }
 
@@ -272,7 +308,7 @@ macro_rules! impl_system {
             }
 
             #[allow(unused_variables)]
-            fn is_exclusive(&self, world: &WorldContainer) -> bool
+            fn is_exclusive(&self, world: &mut WorldContainer) -> bool
             {
                 $(
                     $param::is_exclusive(world) ||
@@ -284,13 +320,13 @@ macro_rules! impl_system {
         where
             $($param: SystemParam + Send + Sync + 'static,)*
         {
-            const HAS_WORLD : bool = $( $param::IS_WORLD || ) * false;
+            const HAS_MUT_WORLD : bool = $( $param::IS_MUT_WORLD || ) * false;
             const NUM_PARAMS: usize = $(count_params::<$param>() + )* 0;
 
             type SystemType = SystemContainer<FUN, ($($param,)*)>;
 
             fn into_system(self) -> Self::SystemType {
-                if Self::HAS_WORLD && Self::NUM_PARAMS > 1 {
+                if Self::HAS_MUT_WORLD && Self::NUM_PARAMS > 1 {
                     panic!("If a system has a parameter of &mut WorldContainer, then that parameter must be the only parameter");
                 }
 
@@ -339,15 +375,15 @@ fn add_dependencies(
     }
 }
 
-impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rworld, 'res, R> {
+impl<'rworld, 'res, R: Resource + 'static> SystemParam for Res<'rworld, 'res, R> {
     type State = ();
-    const IS_WORLD: bool = false;
+    const IS_MUT_WORLD: bool = false;
 
     fn add_dependencies(
         store: &mut WorldContainer,
         components: &mut SparseSet<ComponentId, AccessMode>,
     ) {
-        let id = store.get_component_id_assertive::<R>();
+        let id = store.get_or_create_component_id::<R>();
         components.insert(id, AccessMode::Read);
     }
 
@@ -355,19 +391,16 @@ impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rw
     where
         'world: 'state,
     {
-        let id = store.get_component_id_assertive::<R>();
+        let id = store.get_or_create_component_id::<R>();
         // SAFETY: The scheduler MUST ensure that no system will mutably access this resource in parallel with this access
         unsafe {
-            let res = if *store
-                .resource_sendness
-                .get(&id)
-                .expect("Failed to find resource info")
-            {
-                store.send_resources.get_unsafe_ref::<R>(id)
-            } else {
-                store.non_send_resources.get_unsafe_ref::<R>(id)
-            };
-            std::mem::transmute(res.unwrap())
+            let res = store.send_resources.get_unsafe_ref::<R>(id);
+            let ptr = res.expect("Resource not found!");
+            std::mem::transmute(Res {
+                _ph: PhantomData,
+                _ph_world: PhantomData,
+                ptr,
+            })
         }
     }
 
@@ -383,24 +416,20 @@ impl<'rworld, 'res, R: Resource + Send + Sync + 'static> SystemParam for Res<'rw
 
     fn on_entity_destroyed(_state: &mut Self::State, _store: &WorldContainer, _entity: Entity) {}
 
-    fn is_exclusive(world: &WorldContainer) -> bool {
-        let id = world.get_component_id_assertive::<R>();
-        !world
-            .resource_sendness
-            .get(&id)
-            .expect("Failed to find component! Register it first")
+    fn is_exclusive(_world: &mut WorldContainer) -> bool {
+        false
     }
 }
 
 impl<'rworld, 'res, R: Resource + 'static> SystemParam for ResMut<'rworld, 'res, R> {
     type State = ();
-    const IS_WORLD: bool = false;
+    const IS_MUT_WORLD: bool = false;
 
     fn add_dependencies(
         store: &mut WorldContainer,
         components: &mut SparseSet<ComponentId, AccessMode>,
     ) {
-        let id = store.get_component_id_assertive::<R>();
+        let id = store.get_or_create_component_id::<R>();
         components.insert(id, AccessMode::Read);
     }
 
@@ -408,19 +437,16 @@ impl<'rworld, 'res, R: Resource + 'static> SystemParam for ResMut<'rworld, 'res,
     where
         'world: 'state,
     {
-        let id = store.get_component_id_assertive::<R>();
+        let id = store.get_or_create_component_id::<R>();
         // SAFETY: The scheduler MUST ensure that no other access is performed in parallel with this access
         unsafe {
-            let res = if *store
-                .resource_sendness
-                .get(&id)
-                .expect("Failed to find resource info")
-            {
-                store.send_resources.get_unsafe_mut_ref::<R>(id)
-            } else {
-                store.non_send_resources.get_unsafe_mut_ref::<R>(id)
-            };
-            std::mem::transmute(res.unwrap())
+            let res = store.send_resources.get_unsafe_mut_ref::<R>(id);
+            let ptr = res.expect("Resource not found!");
+            std::mem::transmute(ResMut {
+                _ph: PhantomData,
+                _ph_world: PhantomData,
+                ptr,
+            })
         }
     }
 
@@ -436,11 +462,7 @@ impl<'rworld, 'res, R: Resource + 'static> SystemParam for ResMut<'rworld, 'res,
 
     fn on_entity_destroyed(_state: &mut Self::State, _store: &WorldContainer, _entity: Entity) {}
 
-    fn is_exclusive(world: &WorldContainer) -> bool {
-        let id = world.get_component_id_assertive::<R>();
-        !world
-            .resource_sendness
-            .get(&id)
-            .expect("Failed to find component! Register it first")
+    fn is_exclusive(_world: &mut WorldContainer) -> bool {
+        true
     }
 }

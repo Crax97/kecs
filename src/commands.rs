@@ -78,11 +78,22 @@ impl<'world> Commands<'world> {
     }
 
     /// Adds a new resource, replacing the old value if it does not exists
-    pub fn add_resource<R: 'static + Resource>(&mut self, resource: R) {
+    pub fn add_resource<R: 'static + Resource + Send>(&mut self, resource: R) {
         self.sender
             .inner
             .send(CommandType::AddResource {
                 resource: TypedBlob::new(resource),
+                send: true,
+            })
+            .expect("Failed to send AddResource command");
+    }
+    /// Adds a new resource, replacing the old value if it does not exists
+    pub fn add_non_send_resource<R: 'static + Resource>(&mut self, resource: R) {
+        self.sender
+            .inner
+            .send(CommandType::AddResource {
+                resource: TypedBlob::new(resource),
+                send: false,
             })
             .expect("Failed to send AddResource command");
     }
@@ -161,6 +172,7 @@ pub(crate) enum CommandType {
     },
     AddResource {
         resource: TypedBlob,
+        send: bool,
     },
 }
 

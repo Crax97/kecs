@@ -82,7 +82,7 @@ pub type World = KecsWorld<GraphScheduler>;
 impl<'cworld> SystemParam for Commands<'cworld> {
     type State = ();
 
-    const IS_WORLD: bool = false;
+    const IS_MUT_WORLD: bool = false;
 
     fn add_dependencies(
         _store: &mut WorldContainer,
@@ -107,7 +107,7 @@ impl<'cworld> SystemParam for Commands<'cworld> {
     ) {
     }
 
-    fn is_exclusive(_world: &WorldContainer) -> bool {
+    fn is_exclusive(_world: &mut WorldContainer) -> bool {
         false
     }
 

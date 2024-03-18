@@ -280,6 +280,13 @@ impl GraphScheduler {
             self.graph
                 .add_edge(leaf, system_node_idx, SystemGraphEdge { changes: vec![] });
         }
+
+        // Force every next resource to be scheduled after the exclusive system
+        for dep in self.current_dependencies.iter_mut() {
+            dep.access_mode = AccessMode::Write;
+            dep.last_accessing.clear();
+            dep.last_writing = Some(system_node_idx);
+        }
     }
 
     fn compute_node_dependencies(
@@ -500,12 +507,7 @@ impl std::fmt::Display for SystemGraphEdge {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        commands::Commands,
-        query::Query,
-        resources::{ResMut, Resource},
-        Entity, WorldContainer,
-    };
+    use crate::{commands::Commands, query::Query, Entity, WorldContainer};
 
     use super::{GraphScheduler, Scheduler};
 
@@ -658,37 +660,37 @@ mod tests {
         struct WrittenByB;
         struct WrittenByC;
 
-        struct NonSendResource;
-        impl Resource for NonSendResource {}
-
         fn sys_a(_: Query<(&SharedByABC, &mut WrittenByA)>) {}
         fn sys_b(_: Query<(&SharedByABC, &mut WrittenByB)>) {}
         fn sys_c(_: Query<(&SharedByABC, &mut WrittenByC)>) {}
         fn exclusive_sys(_: &mut WorldContainer) {}
-        fn sys_d(_: Query<&WrittenByA>, _: ResMut<NonSendResource>) {}
+        fn sys_d(_: &mut WorldContainer) {}
+        fn sys_e(_: Query<&WrittenByA>, _: &WorldContainer) {}
+        fn sys_f(_: Query<(&mut WrittenByB, &WrittenByC)>, _: &WorldContainer) {}
 
         let mut world = make_world_container();
         let mut scheduler = GraphScheduler::new();
 
-        // Register  first the resource
-        world.add_non_send_resource(NonSendResource);
-
         let sys_a_id = scheduler.add_system(&mut world, sys_a);
         let sys_b_id = scheduler.add_system(&mut world, sys_b);
         let sys_c_id = scheduler.add_system(&mut world, sys_c);
-        let sys_f_id = scheduler.add_system(&mut world, exclusive_sys);
+        let sys_excl_id = scheduler.add_system(&mut world, exclusive_sys);
         let sys_d_id = scheduler.add_system(&mut world, sys_d);
+        let sys_e_id = scheduler.add_system(&mut world, sys_e);
+        let sys_f_id = scheduler.add_system(&mut world, sys_f);
 
         let schedule = scheduler.compute_schedule();
 
         scheduler.print_jobs();
-        assert_eq!(schedule.groups.len(), 3);
+        assert_eq!(schedule.groups.len(), 4);
 
         assert!(schedule.groups[0].jobs.contains(&sys_a_id));
         assert!(schedule.groups[0].jobs.contains(&sys_b_id));
         assert!(schedule.groups[0].jobs.contains(&sys_c_id));
-        assert!(schedule.groups[1].jobs.contains(&sys_f_id));
+        assert!(schedule.groups[1].jobs.contains(&sys_excl_id));
         assert!(schedule.groups[2].jobs.contains(&sys_d_id));
+        assert!(schedule.groups[3].jobs.contains(&sys_e_id));
+        assert!(schedule.groups[3].jobs.contains(&sys_f_id));
     }
 
     #[test]

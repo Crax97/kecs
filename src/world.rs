@@ -1,6 +1,6 @@
 use std::any::TypeId;
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 
 use crate::commands::{CommandType, Commands, CommandsReceiver, TypedBlob};
 use crate::{
@@ -149,6 +149,7 @@ impl<S: Scheduler> KecsWorld<S> {
         self.container.get_or_create_component_id::<T>()
     }
 
+    /// Gets the given entity's info, if it exists
     pub fn get_entity_info(&self, id: Entity) -> Option<EntityInfo> {
         self.container.entity_manager.entity_info(id).cloned()
     }
@@ -178,8 +179,8 @@ impl<S: Scheduler> KecsWorld<S> {
                 } => {
                     self.remove_component_dynamic(entity, component_ty, component_ty_name);
                 }
-                CommandType::AddResource { resource } => {
-                    self.add_resource_dynamic(resource);
+                CommandType::AddResource { resource, send } => {
+                    self.add_resource_dynamic(resource, send);
                 }
                 CommandType::DestroyEntity { entity } => self.destroy_entity(entity),
             }
@@ -218,8 +219,10 @@ impl<S: Scheduler> KecsWorld<S> {
         self.update_systems(entity);
     }
 
-    fn add_resource_dynamic(&mut self, _resource: TypedBlob) {
-        todo!()
+    fn add_resource_dynamic(&mut self, resource: TypedBlob, send: bool) {
+        // # Safety
+        // The type matches because we used generic functions to create the storage
+        unsafe { self.container.add_resource_dynamic(resource, send) }
     }
 }
 

@@ -99,14 +99,14 @@ impl WorldContainer {
 
     /// Creates a new `Send` resource: a resource can be accessed by a system either through
     /// [`crate::Res`] or [`crate::ResMut`], access to the resource will be done in parallel when possible
-    pub fn add_resource<R: 'static + Send + Sync + Resource>(&mut self, resource: R) {
+    pub fn add_resource<R: 'static + Resource>(&mut self, resource: R) {
         let id = self.get_or_create_component_id::<R>();
         self.resource_sendness.insert(id, true);
         self.send_resources.add(id, resource);
     }
 
     /// Creates a new `!Send` resource: accessing this resource can only be done on the main thread
-    pub fn add_non_send_resource<R: 'static + Resource>(&mut self, resource: R) {
+    pub fn add_non_send_resource<R: 'static>(&mut self, resource: R) {
         let id = self.get_or_create_component_id::<R>();
         self.resource_sendness.insert(id, false);
         self.non_send_resources.add(id, resource);
@@ -248,6 +248,16 @@ impl WorldContainer {
             &mut self.storage,
         );
         self.update_entity_archetype(entity);
+    }
+
+    pub(crate) unsafe fn add_resource_dynamic(&mut self, resource: TypedBlob, send: bool) {
+        let component_id = self.get_or_create_component_id_dynamic(
+            resource.blob_ty_id,
+            resource.type_name.expect("No type name"),
+        );
+        if send {
+            self.send_resources.add_dynamic(component_id, resource)
+        }
     }
 }
 
